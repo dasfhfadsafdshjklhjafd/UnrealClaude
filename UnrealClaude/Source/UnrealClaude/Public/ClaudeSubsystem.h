@@ -87,6 +87,9 @@ public:
 	/** Clear conversation history */
 	void ClearHistory();
 
+	/** Inject a synthetic exchange into history (used after compact to seed summary as context) */
+	void AddExchange(const FString& Prompt, const FString& Response);
+
 	/** Cancel current request */
 	void CancelCurrentRequest();
 

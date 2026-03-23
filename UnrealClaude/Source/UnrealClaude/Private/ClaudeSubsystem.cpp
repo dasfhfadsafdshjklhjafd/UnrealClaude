@@ -195,6 +195,14 @@ void FClaudeCodeSubsystem::ClearHistory()
 	}
 }
 
+void FClaudeCodeSubsystem::AddExchange(const FString& Prompt, const FString& Response)
+{
+	if (SessionManager.IsValid())
+	{
+		SessionManager->AddExchange(Prompt, Response);
+	}
+}
+
 void FClaudeCodeSubsystem::CancelCurrentRequest()
 {
 	if (Runner.IsValid())

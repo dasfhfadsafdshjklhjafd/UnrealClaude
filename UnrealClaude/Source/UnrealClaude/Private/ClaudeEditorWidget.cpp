@@ -581,8 +581,14 @@ void SClaudeEditorWidget::CompactSession()
 				SessionInputTokens = 0;
 				SessionOutputTokens = 0;
 
-				// Show the summary in chat and add it to history as context for next turn
-				AddMessage(TEXT("[Session compacted — summary below will be used as context]"), false);
+				// Inject summary as a single history exchange so BuildPromptWithHistory includes it
+				FClaudeCodeSubsystem::Get().AddExchange(
+					TEXT("[Previous conversation — summarized]"),
+					Summary
+				);
+
+				// Show the summary in chat
+				AddMessage(TEXT("[Session compacted — summary injected as context for next message]"), false);
 				AddMessage(Summary, false);
 			}
 			else

@@ -202,6 +202,19 @@ TSharedRef<SWidget> SClaudeEditorWidget::BuildToolbar()
 		.OnCopyChat_Lambda([this]() { CopyWholeChat(); })
 		.OnCompact_Lambda([this]() { CompactSession(); })
 		.SelectedModel_Lambda([this]() { return SelectedModel; })
+		.TokenCountText_Lambda([this]() -> FText
+		{
+			int32 TotalK = (SessionInputTokens + SessionOutputTokens + 999) / 1000;
+			if (TotalK == 0) return FText::GetEmpty();
+			return FText::FromString(FString::Printf(TEXT("ctx: %dk"), TotalK));
+		})
+		.TokenCountColor_Lambda([this]() -> FSlateColor
+		{
+			int32 Total = SessionInputTokens + SessionOutputTokens;
+			if (Total > 130000) return FSlateColor(FLinearColor(1.0f, 0.25f, 0.25f));
+			if (Total > 80000)  return FSlateColor(FLinearColor(1.0f, 0.7f, 0.1f));
+			return FSlateColor(FLinearColor(0.5f, 0.5f, 0.55f));
+		})
 		.OnModelChanged_Lambda([this](const FString& NewModel)
 		{
 			SelectedModel = NewModel;
@@ -258,35 +271,6 @@ TSharedRef<SWidget> SClaudeEditorWidget::BuildStatusBar()
 				SNullWidget::NullWidget
 			]
 			
-			// Token counter
-			+ SHorizontalBox::Slot()
-			.AutoWidth()
-			.VAlign(VAlign_Center)
-			.Padding(8.0f, 0.0f, 4.0f, 0.0f)
-			[
-				SNew(STextBlock)
-				.Text_Lambda([this]() -> FText
-				{
-					int32 TotalK = (SessionInputTokens + SessionOutputTokens + 999) / 1000;
-					if (TotalK == 0) return FText::GetEmpty();
-					return FText::FromString(FString::Printf(TEXT("ctx: %dk"), TotalK));
-				})
-				.ColorAndOpacity_Lambda([this]() -> FSlateColor
-				{
-					int32 Total = SessionInputTokens + SessionOutputTokens;
-					if (Total > 130000) return FSlateColor(FLinearColor(1.0f, 0.25f, 0.25f)); // Red
-					if (Total > 80000)  return FSlateColor(FLinearColor(1.0f, 0.7f, 0.1f));  // Orange
-					return FSlateColor(FLinearColor(0.45f, 0.45f, 0.5f)); // Muted
-				})
-				.TextStyle(FAppStyle::Get(), "SmallText")
-				.ToolTipText_Lambda([this]() -> FText
-				{
-					return FText::FromString(FString::Printf(
-						TEXT("Session context: %d in + %d out = %d tokens\n80k = yellow warning\n130k = red (approaching limit)"),
-						SessionInputTokens, SessionOutputTokens, SessionInputTokens + SessionOutputTokens));
-				})
-			]
-
 			// Project path (convert to absolute and shorten home dir to ~/)
 			+ SHorizontalBox::Slot()
 			.AutoWidth()

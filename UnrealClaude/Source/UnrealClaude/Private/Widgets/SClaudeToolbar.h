@@ -28,6 +28,8 @@ public:
 		SLATE_ATTRIBUTE(bool, bProjectContextEnabled)
 		SLATE_ATTRIBUTE(bool, bRestoreEnabled)
 		SLATE_ATTRIBUTE(FString, SelectedModel)
+		SLATE_ATTRIBUTE(FText, TokenCountText)
+		SLATE_ATTRIBUTE(FSlateColor, TokenCountColor)
 		SLATE_EVENT(FOnCheckboxChanged, OnUE57ContextChanged)
 		SLATE_EVENT(FOnCheckboxChanged, OnProjectContextChanged)
 		SLATE_EVENT(FOnToolbarAction, OnRefreshContext)
@@ -47,6 +49,8 @@ private:
 	TAttribute<bool> bProjectContextEnabled;
 	TAttribute<bool> bRestoreEnabled;
 	TAttribute<FString> SelectedModel;
+	TAttribute<FText> TokenCountText;
+	TAttribute<FSlateColor> TokenCountColor;
 
 	FOnCheckboxChanged OnUE57ContextChanged;
 	FOnCheckboxChanged OnProjectContextChanged;

@@ -1,0 +1,3 @@
+Please produce a concise summary of the conversation below.
+Preserve all key technical decisions, facts, file paths, Blueprint names, and any open questions.
+This summary will replace the full history as the context for our next exchange, so be thorough but compact.

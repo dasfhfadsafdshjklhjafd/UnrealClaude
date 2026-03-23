@@ -26,6 +26,9 @@
 #include "Styling/AppStyle.h"
 #include "Styling/CoreStyle.h"
 #include "HAL/PlatformApplicationMisc.h"
+#include "HAL/FileManager.h"
+#include "Misc/FileHelper.h"
+#include "Interfaces/IPluginManager.h"
 
 #define LOCTEXT_NAMESPACE "UnrealClaude"
 
@@ -532,12 +535,21 @@ void SClaudeEditorWidget::CompactSession()
 		Transcript += TEXT("User: ") + Exchange.Key + TEXT("\n\nAssistant: ") + Exchange.Value + TEXT("\n\n");
 	}
 
-	FString CompactPrompt = FString::Printf(
-		TEXT("Please produce a concise summary of the conversation below. ")
-		TEXT("Preserve all key technical decisions, facts, file paths, Blueprint names, and any open questions. ")
-		TEXT("This summary will replace the full history as the context for our next exchange, so be thorough but compact.\n\n")
-		TEXT("--- CONVERSATION ---\n%s--- END ---"),
-		*Transcript);
+	// Load compact prompt from Resources/ClaudeCompactPrompt.txt, fall back to default
+	FString PromptTemplate;
+	FString PromptFilePath = FPaths::ConvertRelativePathToFull(
+		FPaths::Combine(IPluginManager::Get().FindPlugin(TEXT("UnrealClaude"))->GetBaseDir(),
+			TEXT("Resources/ClaudeCompactPrompt.txt")));
+	if (!FFileHelper::LoadFileToString(PromptTemplate, *PromptFilePath) || PromptTemplate.TrimStartAndEnd().IsEmpty())
+	{
+		PromptTemplate = TEXT("Please produce a concise summary of the conversation below. ")
+			TEXT("Preserve all key technical decisions, facts, file paths, Blueprint names, and any open questions. ")
+			TEXT("This summary will replace the full history as the context for our next exchange, so be thorough but compact.");
+	}
+	PromptTemplate.TrimEndInline();
+
+	FString CompactPrompt = FString::Printf(TEXT("%s\n\n--- CONVERSATION ---\n%s--- END ---"),
+		*PromptTemplate, *Transcript);
 
 	AddMessage(TEXT("Compacting conversation history... (please wait)"), false);
 

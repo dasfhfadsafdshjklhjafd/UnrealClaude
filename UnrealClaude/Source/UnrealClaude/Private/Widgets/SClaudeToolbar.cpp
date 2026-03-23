@@ -3,6 +3,7 @@
 #include "SClaudeToolbar.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Input/SComboBox.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/SBoxPanel.h"
@@ -11,11 +12,20 @@
 
 #define LOCTEXT_NAMESPACE "UnrealClaude"
 
+FString SClaudeToolbar::GetModelDisplayName(const FString& ModelId)
+{
+	if (ModelId == TEXT("claude-opus-4-6"))       return TEXT("Opus 4.6");
+	if (ModelId == TEXT("claude-sonnet-4-6"))     return TEXT("Sonnet 4.6");
+	if (ModelId == TEXT("claude-haiku-4-5-20251001")) return TEXT("Haiku 4.5");
+	return ModelId;
+}
+
 void SClaudeToolbar::Construct(const FArguments& InArgs)
 {
 	bUE57ContextEnabled = InArgs._bUE57ContextEnabled;
 	bProjectContextEnabled = InArgs._bProjectContextEnabled;
 	bRestoreEnabled = InArgs._bRestoreEnabled;
+	SelectedModel = InArgs._SelectedModel;
 	OnUE57ContextChanged = InArgs._OnUE57ContextChanged;
 	OnProjectContextChanged = InArgs._OnProjectContextChanged;
 	OnRefreshContext = InArgs._OnRefreshContext;
@@ -23,6 +33,13 @@ void SClaudeToolbar::Construct(const FArguments& InArgs)
 	OnNewSession = InArgs._OnNewSession;
 	OnClear = InArgs._OnClear;
 	OnCopyLast = InArgs._OnCopyLast;
+	OnModelChanged = InArgs._OnModelChanged;
+
+	ModelOptions = {
+		MakeShared<FString>(TEXT("claude-sonnet-4-6")),
+		MakeShared<FString>(TEXT("claude-opus-4-6")),
+		MakeShared<FString>(TEXT("claude-haiku-4-5-20251001")),
+	};
 
 	ChildSlot
 	[
@@ -40,6 +57,29 @@ void SClaudeToolbar::Construct(const FArguments& InArgs)
 				SNew(STextBlock)
 				.Text(LOCTEXT("Title", "Claude Assistant"))
 				.TextStyle(FAppStyle::Get(), "LargeText")
+			]
+
+			// Model selector
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			.Padding(8.0f, 0.0f)
+			[
+				SNew(SComboBox<TSharedPtr<FString>>)
+				.OptionsSource(&ModelOptions)
+				.OnSelectionChanged_Lambda([this](TSharedPtr<FString> Item, ESelectInfo::Type)
+				{
+					if (Item.IsValid()) OnModelChanged.ExecuteIfBound(*Item);
+				})
+				.OnGenerateWidget_Lambda([](TSharedPtr<FString> Item) -> TSharedRef<SWidget>
+				{
+					return SNew(STextBlock).Text(FText::FromString(SClaudeToolbar::GetModelDisplayName(Item.IsValid() ? *Item : FString())));
+				})
+				.ToolTipText(LOCTEXT("ModelSelectorTip", "Select Claude model"))
+				[
+					SNew(STextBlock)
+					.Text_Lambda([this]() { return FText::FromString(SClaudeToolbar::GetModelDisplayName(SelectedModel.Get())); })
+				]
 			]
 
 			+ SHorizontalBox::Slot()

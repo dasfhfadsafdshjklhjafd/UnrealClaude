@@ -99,7 +99,8 @@ void FClaudeCodeSubsystem::SendPrompt(
 	Config.Prompt = BuildPromptWithHistory(Prompt);
 	Config.WorkingDirectory = FPaths::ProjectDir();
 	Config.bSkipPermissions = true;
-	Config.AllowedTools = { TEXT("Read"), TEXT("Write"), TEXT("Edit"), TEXT("Grep"), TEXT("Glob"), TEXT("Bash") };
+	Config.AllowedTools = { TEXT("Read"), TEXT("Grep"), TEXT("Glob") };
+	Config.Model = SelectedModel;
 
 	Config.AttachedImagePaths = Options.AttachedImagePaths;
 

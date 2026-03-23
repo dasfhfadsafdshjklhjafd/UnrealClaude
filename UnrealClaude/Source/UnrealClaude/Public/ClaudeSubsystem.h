@@ -77,6 +77,10 @@ public:
 	/** Set custom system prompt additions */
 	void SetCustomSystemPrompt(const FString& InCustomPrompt);
 
+	/** Get/Set the active Claude model (e.g. "claude-sonnet-4-6") */
+	void SetModel(const FString& InModel) { SelectedModel = InModel; }
+	const FString& GetModel() const { return SelectedModel; }
+
 	/** Get conversation history (delegates to session manager) */
 	const TArray<TPair<FString, FString>>& GetHistory() const;
 
@@ -110,4 +114,5 @@ private:
 	TUniquePtr<FClaudeCodeRunner> Runner;
 	TUniquePtr<FClaudeSessionManager> SessionManager;
 	FString CustomSystemPrompt;
+	FString SelectedModel = TEXT("claude-sonnet-4-6");
 };

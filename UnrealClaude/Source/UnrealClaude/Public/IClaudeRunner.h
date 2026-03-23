@@ -110,6 +110,9 @@ struct UNREALCLAUDE_API FClaudeRequestConfig
 
 	/** Optional callback for structured NDJSON stream events */
 	FOnClaudeStreamEvent OnStreamEvent;
+
+	/** Claude model to use (e.g. "claude-sonnet-4-6"). Empty = CLI default. */
+	FString Model;
 };
 
 /**

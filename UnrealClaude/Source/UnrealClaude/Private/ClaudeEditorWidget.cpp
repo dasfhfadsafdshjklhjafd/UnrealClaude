@@ -198,7 +198,13 @@ TSharedRef<SWidget> SClaudeEditorWidget::BuildToolbar()
 		.OnRestoreSession_Lambda([this]() { RestoreSession(); })
 		.OnNewSession_Lambda([this]() { NewSession(); })
 		.OnClear_Lambda([this]() { ClearChat(); })
-		.OnCopyLast_Lambda([this]() { CopyToClipboard(); });
+		.OnCopyLast_Lambda([this]() { CopyToClipboard(); })
+		.SelectedModel_Lambda([this]() { return SelectedModel; })
+		.OnModelChanged_Lambda([this](const FString& NewModel)
+		{
+			SelectedModel = NewModel;
+			FClaudeCodeSubsystem::Get().SetModel(NewModel);
+		});
 }
 
 TSharedRef<SWidget> SClaudeEditorWidget::BuildChatArea()

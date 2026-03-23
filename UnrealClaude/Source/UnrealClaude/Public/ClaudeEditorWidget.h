@@ -170,6 +170,9 @@ private:
 	/** Include project context in prompts */
 	bool bIncludeProjectContext = true;
 
+	/** Selected Claude model */
+	FString SelectedModel = TEXT("claude-sonnet-4-6");
+
 	/** Handle streaming progress from Claude (legacy, still used for accumulation) */
 	void OnClaudeProgress(const FString& PartialOutput);
 

@@ -5,9 +5,11 @@
 #include "CoreMinimal.h"
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/DeclarativeSyntaxSupport.h"
+#include "Widgets/Input/SComboBox.h"
 
 DECLARE_DELEGATE(FOnToolbarAction)
 DECLARE_DELEGATE_OneParam(FOnCheckboxChanged, bool)
+DECLARE_DELEGATE_OneParam(FOnModelChanged, const FString& /*ModelId*/)
 
 /**
  * Toolbar widget for Claude Editor
@@ -20,10 +22,12 @@ public:
 		: _bUE57ContextEnabled(true)
 		, _bProjectContextEnabled(true)
 		, _bRestoreEnabled(false)
+		, _SelectedModel(TEXT("claude-sonnet-4-6"))
 	{}
 		SLATE_ATTRIBUTE(bool, bUE57ContextEnabled)
 		SLATE_ATTRIBUTE(bool, bProjectContextEnabled)
 		SLATE_ATTRIBUTE(bool, bRestoreEnabled)
+		SLATE_ATTRIBUTE(FString, SelectedModel)
 		SLATE_EVENT(FOnCheckboxChanged, OnUE57ContextChanged)
 		SLATE_EVENT(FOnCheckboxChanged, OnProjectContextChanged)
 		SLATE_EVENT(FOnToolbarAction, OnRefreshContext)
@@ -31,6 +35,7 @@ public:
 		SLATE_EVENT(FOnToolbarAction, OnNewSession)
 		SLATE_EVENT(FOnToolbarAction, OnClear)
 		SLATE_EVENT(FOnToolbarAction, OnCopyLast)
+		SLATE_EVENT(FOnModelChanged, OnModelChanged)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
@@ -39,6 +44,7 @@ private:
 	TAttribute<bool> bUE57ContextEnabled;
 	TAttribute<bool> bProjectContextEnabled;
 	TAttribute<bool> bRestoreEnabled;
+	TAttribute<FString> SelectedModel;
 
 	FOnCheckboxChanged OnUE57ContextChanged;
 	FOnCheckboxChanged OnProjectContextChanged;
@@ -47,4 +53,9 @@ private:
 	FOnToolbarAction OnNewSession;
 	FOnToolbarAction OnClear;
 	FOnToolbarAction OnCopyLast;
+	FOnModelChanged OnModelChanged;
+
+	TArray<TSharedPtr<FString>> ModelOptions;
+
+	static FString GetModelDisplayName(const FString& ModelId);
 };

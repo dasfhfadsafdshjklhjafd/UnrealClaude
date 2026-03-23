@@ -339,6 +339,12 @@ FString FClaudeCodeRunner::BuildCommandLine(const FClaudeRequestConfig& Config)
 	CommandLine += TEXT("--output-format stream-json ");
 	CommandLine += TEXT("--input-format stream-json ");
 
+	// Model selection
+	if (!Config.Model.IsEmpty())
+	{
+		CommandLine += FString::Printf(TEXT("--model %s "), *Config.Model);
+	}
+
 	// MCP config for editor tools
 	FString PluginDir = GetPluginDirectory();
 	if (!PluginDir.IsEmpty())

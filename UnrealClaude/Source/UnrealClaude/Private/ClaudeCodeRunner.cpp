@@ -901,8 +901,17 @@ void FClaudeCodeRunner::ParseAndEmitNdjsonLine(const FString& JsonLine)
 		double TotalCostUsd = 0.0;
 		JsonObj->TryGetNumberField(TEXT("total_cost_usd"), TotalCostUsd);
 
-		UE_LOG(LogUnrealClaude, Log, TEXT("NDJSON Result: subtype=%s, is_error=%d, duration=%.0fms, turns=%.0f, cost=$%.4f, result=%d chars"),
-			*Subtype, bIsError, DurationMs, NumTurns, TotalCostUsd, ResultText.Len());
+		// Parse token usage
+		double InputTokens = 0.0, OutputTokens = 0.0;
+		const TSharedPtr<FJsonObject>* UsageObj = nullptr;
+		if (JsonObj->TryGetObjectField(TEXT("usage"), UsageObj) && UsageObj)
+		{
+			(*UsageObj)->TryGetNumberField(TEXT("input_tokens"), InputTokens);
+			(*UsageObj)->TryGetNumberField(TEXT("output_tokens"), OutputTokens);
+		}
+
+		UE_LOG(LogUnrealClaude, Log, TEXT("NDJSON Result: subtype=%s, is_error=%d, duration=%.0fms, turns=%.0f, cost=$%.4f, tokens=%.0f/%.0f, result=%d chars"),
+			*Subtype, bIsError, DurationMs, NumTurns, TotalCostUsd, InputTokens, OutputTokens, ResultText.Len());
 
 		if (CurrentConfig.OnStreamEvent.IsBound())
 		{
@@ -913,6 +922,8 @@ void FClaudeCodeRunner::ParseAndEmitNdjsonLine(const FString& JsonLine)
 			Event.DurationMs = static_cast<int32>(DurationMs);
 			Event.NumTurns = static_cast<int32>(NumTurns);
 			Event.TotalCostUsd = static_cast<float>(TotalCostUsd);
+			Event.InputTokens = static_cast<int32>(InputTokens);
+			Event.OutputTokens = static_cast<int32>(OutputTokens);
 			Event.RawJson = JsonLine;
 			FOnClaudeStreamEvent EventDelegate = CurrentConfig.OnStreamEvent;
 			AsyncTask(ENamedThreads::GameThread, [EventDelegate, Event]()

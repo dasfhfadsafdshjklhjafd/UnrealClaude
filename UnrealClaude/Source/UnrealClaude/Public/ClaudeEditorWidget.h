@@ -68,6 +68,12 @@ private:
 	/** Copy selected text or last response */
 	void CopyToClipboard();
 
+	/** Copy entire chat history to clipboard */
+	void CopyWholeChat();
+
+	/** Send a compact/summarize request and replace history with summary */
+	void CompactSession();
+
 	/** Restore previous session context */
 	void RestoreSession();
 
@@ -173,6 +179,12 @@ private:
 
 	/** Selected Claude model */
 	FString SelectedModel = TEXT("claude-sonnet-4-6");
+
+	/** Accumulated input token count for the current session */
+	int32 SessionInputTokens = 0;
+
+	/** Accumulated output token count for the current session */
+	int32 SessionOutputTokens = 0;
 
 	/** Handle streaming progress from Claude (legacy, still used for accumulation) */
 	void OnClaudeProgress(const FString& PartialOutput);

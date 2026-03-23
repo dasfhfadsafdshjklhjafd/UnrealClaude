@@ -33,6 +33,8 @@ void SClaudeToolbar::Construct(const FArguments& InArgs)
 	OnNewSession = InArgs._OnNewSession;
 	OnClear = InArgs._OnClear;
 	OnCopyLast = InArgs._OnCopyLast;
+	OnCopyChat = InArgs._OnCopyChat;
+	OnCompact = InArgs._OnCompact;
 	OnModelChanged = InArgs._OnModelChanged;
 
 	ModelOptions = {
@@ -169,7 +171,7 @@ void SClaudeToolbar::Construct(const FArguments& InArgs)
 				.ToolTipText(LOCTEXT("ClearTip", "Clear chat display"))
 			]
 
-			// Copy button
+			// Copy Last button
 			+ SHorizontalBox::Slot()
 			.AutoWidth()
 			.VAlign(VAlign_Center)
@@ -179,6 +181,30 @@ void SClaudeToolbar::Construct(const FArguments& InArgs)
 				.Text(LOCTEXT("Copy", "Copy Last"))
 				.OnClicked_Lambda([this]() { OnCopyLast.ExecuteIfBound(); return FReply::Handled(); })
 				.ToolTipText(LOCTEXT("CopyTip", "Copy last response to clipboard"))
+			]
+
+			// Copy Chat button
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			.Padding(4.0f, 0.0f)
+			[
+				SNew(SButton)
+				.Text(LOCTEXT("CopyChat", "Copy Chat"))
+				.OnClicked_Lambda([this]() { OnCopyChat.ExecuteIfBound(); return FReply::Handled(); })
+				.ToolTipText(LOCTEXT("CopyChatTip", "Copy entire chat history to clipboard"))
+			]
+
+			// Compact button
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			.Padding(4.0f, 0.0f)
+			[
+				SNew(SButton)
+				.Text(LOCTEXT("Compact", "Compact"))
+				.OnClicked_Lambda([this]() { OnCompact.ExecuteIfBound(); return FReply::Handled(); })
+				.ToolTipText(LOCTEXT("CompactTip", "Summarize and compress conversation history to free up context window"))
 			]
 		]
 	];

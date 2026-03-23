@@ -69,6 +69,12 @@ struct UNREALCLAUDE_API FClaudeStreamEvent
 	/** Total cost in USD (for Result events) */
 	float TotalCostUsd = 0.0f;
 
+	/** Input token count for this exchange (for Result events) */
+	int32 InputTokens = 0;
+
+	/** Output token count for this exchange (for Result events) */
+	int32 OutputTokens = 0;
+
 	/** Result text (for Result events) */
 	FString ResultText;
 

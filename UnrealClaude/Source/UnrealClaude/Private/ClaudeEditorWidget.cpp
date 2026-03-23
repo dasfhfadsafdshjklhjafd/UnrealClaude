@@ -199,6 +199,8 @@ TSharedRef<SWidget> SClaudeEditorWidget::BuildToolbar()
 		.OnNewSession_Lambda([this]() { NewSession(); })
 		.OnClear_Lambda([this]() { ClearChat(); })
 		.OnCopyLast_Lambda([this]() { CopyToClipboard(); })
+		.OnCopyChat_Lambda([this]() { CopyWholeChat(); })
+		.OnCompact_Lambda([this]() { CompactSession(); })
 		.SelectedModel_Lambda([this]() { return SelectedModel; })
 		.OnModelChanged_Lambda([this](const FString& NewModel)
 		{
@@ -256,6 +258,35 @@ TSharedRef<SWidget> SClaudeEditorWidget::BuildStatusBar()
 				SNullWidget::NullWidget
 			]
 			
+			// Token counter
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			.Padding(8.0f, 0.0f, 4.0f, 0.0f)
+			[
+				SNew(STextBlock)
+				.Text_Lambda([this]() -> FText
+				{
+					int32 TotalK = (SessionInputTokens + SessionOutputTokens + 999) / 1000;
+					if (TotalK == 0) return FText::GetEmpty();
+					return FText::FromString(FString::Printf(TEXT("ctx: %dk"), TotalK));
+				})
+				.ColorAndOpacity_Lambda([this]() -> FSlateColor
+				{
+					int32 Total = SessionInputTokens + SessionOutputTokens;
+					if (Total > 130000) return FSlateColor(FLinearColor(1.0f, 0.25f, 0.25f)); // Red
+					if (Total > 80000)  return FSlateColor(FLinearColor(1.0f, 0.7f, 0.1f));  // Orange
+					return FSlateColor(FLinearColor(0.45f, 0.45f, 0.5f)); // Muted
+				})
+				.TextStyle(FAppStyle::Get(), "SmallText")
+				.ToolTipText_Lambda([this]() -> FText
+				{
+					return FText::FromString(FString::Printf(
+						TEXT("Session context: %d in + %d out = %d tokens\n80k = yellow warning\n130k = red (approaching limit)"),
+						SessionInputTokens, SessionOutputTokens, SessionInputTokens + SessionOutputTokens));
+				})
+			]
+
 			// Project path (convert to absolute and shorten home dir to ~/)
 			+ SHorizontalBox::Slot()
 			.AutoWidth()
@@ -448,6 +479,8 @@ void SClaudeEditorWidget::ClearChat()
 	}
 
 	FClaudeCodeSubsystem::Get().ClearHistory();
+	SessionInputTokens = 0;
+	SessionOutputTokens = 0;
 	LastResponse.Empty();
 	ResetStreamingState();
 
@@ -469,6 +502,99 @@ void SClaudeEditorWidget::CopyToClipboard()
 		FPlatformApplicationMisc::ClipboardCopy(*LastResponse);
 		UE_LOG(LogUnrealClaude, Log, TEXT("Copied response to clipboard"));
 	}
+}
+
+void SClaudeEditorWidget::CopyWholeChat()
+{
+	const TArray<TPair<FString, FString>>& History = FClaudeCodeSubsystem::Get().GetHistory();
+	if (History.IsEmpty())
+	{
+		UE_LOG(LogUnrealClaude, Log, TEXT("CopyWholeChat: no history to copy"));
+		return;
+	}
+
+	FString ChatText;
+	for (const TPair<FString, FString>& Exchange : History)
+	{
+		ChatText += TEXT("You: ");
+		ChatText += Exchange.Key;
+		ChatText += TEXT("\n\nClaude: ");
+		ChatText += Exchange.Value;
+		ChatText += TEXT("\n\n---\n\n");
+	}
+
+	FPlatformApplicationMisc::ClipboardCopy(*ChatText);
+	UE_LOG(LogUnrealClaude, Log, TEXT("CopyWholeChat: copied %d exchanges (%d chars)"), History.Num(), ChatText.Len());
+}
+
+void SClaudeEditorWidget::CompactSession()
+{
+	if (bIsWaitingForResponse)
+	{
+		return;
+	}
+
+	const TArray<TPair<FString, FString>>& History = FClaudeCodeSubsystem::Get().GetHistory();
+	if (History.IsEmpty())
+	{
+		AddMessage(TEXT("Nothing to compact — chat history is empty."), false);
+		return;
+	}
+
+	// Build conversation transcript
+	FString Transcript;
+	for (const TPair<FString, FString>& Exchange : History)
+	{
+		Transcript += TEXT("User: ") + Exchange.Key + TEXT("\n\nAssistant: ") + Exchange.Value + TEXT("\n\n");
+	}
+
+	FString CompactPrompt = FString::Printf(
+		TEXT("Please produce a concise summary of the conversation below. ")
+		TEXT("Preserve all key technical decisions, facts, file paths, Blueprint names, and any open questions. ")
+		TEXT("This summary will replace the full history as the context for our next exchange, so be thorough but compact.\n\n")
+		TEXT("--- CONVERSATION ---\n%s--- END ---"),
+		*Transcript);
+
+	AddMessage(TEXT("Compacting conversation history... (please wait)"), false);
+
+	bIsWaitingForResponse = true;
+	StreamingStartTime = FPlatformTime::Seconds();
+
+	FClaudeRequestConfig Config;
+	Config.Prompt = CompactPrompt;
+	Config.WorkingDirectory = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
+	Config.bSkipPermissions = true;
+	Config.Model = SelectedModel;
+	// No OnStreamEvent — we handle the result in OnComplete only
+
+	FClaudeCodeSubsystem::Get().GetRunner()->ExecuteAsync(
+		Config,
+		FOnClaudeResponse::CreateLambda([this](const FString& Summary, bool bSuccess)
+		{
+			bIsWaitingForResponse = false;
+			ResetStreamingState();
+
+			if (bSuccess && !Summary.IsEmpty())
+			{
+				// Clear chat display and history
+				if (ChatMessagesBox.IsValid())
+				{
+					ChatMessagesBox->ClearChildren();
+				}
+				FClaudeCodeSubsystem::Get().ClearHistory();
+				SessionInputTokens = 0;
+				SessionOutputTokens = 0;
+
+				// Show the summary in chat and add it to history as context for next turn
+				AddMessage(TEXT("[Session compacted — summary below will be used as context]"), false);
+				AddMessage(Summary, false);
+			}
+			else
+			{
+				AddMessage(FString::Printf(TEXT("Compact failed: %s"), *Summary), false);
+			}
+		})
+	);
 }
 
 void SClaudeEditorWidget::RestoreSession()
@@ -519,6 +645,8 @@ void SClaudeEditorWidget::NewSession()
 
 	// Clear the subsystem history
 	FClaudeCodeSubsystem::Get().ClearHistory();
+	SessionInputTokens = 0;
+	SessionOutputTokens = 0;
 
 	// Clear local state
 	LastResponse.Empty();
@@ -1046,6 +1174,10 @@ void SClaudeEditorWidget::HandleResultEvent(const FClaudeStreamEvent& Event)
 	{
 		StatsText += FString::Printf(TEXT(" | $%.4f"), Event.TotalCostUsd);
 	}
+
+	// Accumulate session token counts
+	SessionInputTokens += Event.InputTokens;
+	SessionOutputTokens += Event.OutputTokens;
 
 	// Store final stats for the status bar
 	LastResultStats = StatsText;

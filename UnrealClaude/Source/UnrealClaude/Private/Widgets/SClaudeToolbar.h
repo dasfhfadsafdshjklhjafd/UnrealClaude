@@ -35,6 +35,8 @@ public:
 		SLATE_EVENT(FOnToolbarAction, OnNewSession)
 		SLATE_EVENT(FOnToolbarAction, OnClear)
 		SLATE_EVENT(FOnToolbarAction, OnCopyLast)
+		SLATE_EVENT(FOnToolbarAction, OnCopyChat)
+		SLATE_EVENT(FOnToolbarAction, OnCompact)
 		SLATE_EVENT(FOnModelChanged, OnModelChanged)
 	SLATE_END_ARGS()
 
@@ -53,6 +55,8 @@ private:
 	FOnToolbarAction OnNewSession;
 	FOnToolbarAction OnClear;
 	FOnToolbarAction OnCopyLast;
+	FOnToolbarAction OnCopyChat;
+	FOnToolbarAction OnCompact;
 	FOnModelChanged OnModelChanged;
 
 	TArray<TSharedPtr<FString>> ModelOptions;

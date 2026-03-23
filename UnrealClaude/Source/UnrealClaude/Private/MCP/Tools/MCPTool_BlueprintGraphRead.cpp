@@ -9,6 +9,7 @@
 #include "EdGraph/EdGraphNode.h"
 #include "EdGraph/EdGraphPin.h"
 #include "K2Node.h"
+#include "AnimGraphNode_Base.h"
 
 FMCPToolResult FMCPTool_BlueprintGraphRead::Execute(const TSharedRef<FJsonObject>& Params)
 {
@@ -43,29 +44,38 @@ FMCPToolResult FMCPTool_BlueprintGraphRead::Execute(const TSharedRef<FJsonObject
 	return ExecuteReadGraph(Blueprint, GraphName, MaxNodes, StartNode);
 }
 
+static FString ClassifyGraph(const UEdGraph* Graph, const UBlueprint* BP)
+{
+	const FName CN = Graph->GetClass()->GetFName();
+	if (CN == TEXT("AnimationGraph"))             return TEXT("anim");
+	if (CN == TEXT("AnimationStateMachineGraph")) return TEXT("state_machine");
+	if (CN == TEXT("AnimationTransitionGraph"))   return TEXT("transition");
+	if (CN == TEXT("AnimationStateGraph"))        return TEXT("state");
+	if (CN == TEXT("AnimationConduitGraph"))      return TEXT("conduit");
+	for (UEdGraph* G : BP->EventGraphs)   if (G == Graph) return TEXT("event");
+	for (UEdGraph* G : BP->MacroGraphs)   if (G == Graph) return TEXT("macro");
+	for (UEdGraph* G : BP->FunctionGraphs) if (G == Graph) return TEXT("function");
+	return TEXT("graph");
+}
+
 FMCPToolResult FMCPTool_BlueprintGraphRead::ExecuteListGraphs(UBlueprint* Blueprint)
 {
 	TSharedPtr<FJsonObject> Response = MakeShared<FJsonObject>();
 	Response->SetStringField(TEXT("blueprint"), Blueprint->GetName());
 
+	TArray<UEdGraph*> AllGraphs;
+	Blueprint->GetAllGraphs(AllGraphs);
+
 	TArray<TSharedPtr<FJsonValue>> GraphsArray;
-
-	auto AddGraphs = [&](const TArray<UEdGraph*>& Graphs, const FString& Type)
+	for (UEdGraph* Graph : AllGraphs)
 	{
-		for (UEdGraph* Graph : Graphs)
-		{
-			if (!Graph) continue;
-			TSharedPtr<FJsonObject> G = MakeShared<FJsonObject>();
-			G->SetStringField(TEXT("name"), Graph->GetName());
-			G->SetStringField(TEXT("type"), Type);
-			G->SetNumberField(TEXT("nodes"), Graph->Nodes.Num());
-			GraphsArray.Add(MakeShared<FJsonValueObject>(G));
-		}
-	};
-
-	AddGraphs(Blueprint->EventGraphs, TEXT("event"));
-	AddGraphs(Blueprint->FunctionGraphs, TEXT("function"));
-	AddGraphs(Blueprint->MacroGraphs, TEXT("macro"));
+		if (!Graph) continue;
+		TSharedPtr<FJsonObject> G = MakeShared<FJsonObject>();
+		G->SetStringField(TEXT("name"), Graph->GetName());
+		G->SetStringField(TEXT("type"), ClassifyGraph(Graph, Blueprint));
+		G->SetNumberField(TEXT("nodes"), Graph->Nodes.Num());
+		GraphsArray.Add(MakeShared<FJsonValueObject>(G));
+	}
 
 	Response->SetArrayField(TEXT("graphs"), GraphsArray);
 	Response->SetStringField(TEXT("hint"), TEXT("Pass graph_name to read a specific graph's nodes and connections"));
@@ -115,12 +125,16 @@ UEdGraph* FMCPTool_BlueprintGraphRead::FindGraphByName(
 	const FString& GraphName,
 	FString& OutType)
 {
-	for (UEdGraph* G : Blueprint->EventGraphs)
-		if (G && G->GetName() == GraphName) { OutType = TEXT("event"); return G; }
-	for (UEdGraph* G : Blueprint->FunctionGraphs)
-		if (G && G->GetName() == GraphName) { OutType = TEXT("function"); return G; }
-	for (UEdGraph* G : Blueprint->MacroGraphs)
-		if (G && G->GetName() == GraphName) { OutType = TEXT("macro"); return G; }
+	TArray<UEdGraph*> AllGraphs;
+	Blueprint->GetAllGraphs(AllGraphs);
+	for (UEdGraph* G : AllGraphs)
+	{
+		if (G && G->GetName() == GraphName)
+		{
+			OutType = ClassifyGraph(G, Blueprint);
+			return G;
+		}
+	}
 	return nullptr;
 }
 
@@ -259,5 +273,55 @@ TSharedPtr<FJsonObject> FMCPTool_BlueprintGraphRead::SerializeNode(
 	}
 
 	NodeObj->SetArrayField(TEXT("pins"), PinsArray);
+
+	// AnimGraph PropertyAccess bindings — show what drives each pin (e.g. "CharacterMovement.Velocity.X")
+	if (UAnimGraphNode_Base* AnimNode = Cast<UAnimGraphNode_Base>(Node))
+	{
+		TSharedPtr<FJsonObject> BindingsObj = MakeShared<FJsonObject>();
+
+		// Legacy (pre-UE5.1) bindings
+		for (const TPair<FName, FAnimGraphNodePropertyBinding>& Pair : AnimNode->PropertyBindings_DEPRECATED)
+		{
+			if (!Pair.Value.PathAsText.IsEmpty())
+			{
+				BindingsObj->SetStringField(Pair.Key.ToString(), Pair.Value.PathAsText.ToString());
+			}
+		}
+
+		// Current binding system — get the Binding subobject as UObject* via reflection
+		// (avoids including the internal AnimGraphNodeBinding.h header)
+		UObject* BindingUObj = nullptr;
+		if (FObjectProperty* BindingProp = CastField<FObjectProperty>(
+			UAnimGraphNode_Base::StaticClass()->FindPropertyByName(TEXT("Binding"))))
+		{
+			BindingUObj = BindingProp->GetObjectPropertyValue_InContainer(AnimNode);
+		}
+		if (BindingUObj)
+		{
+			if (FProperty* Prop = BindingUObj->GetClass()->FindPropertyByName(TEXT("PropertyBindings")))
+			{
+				if (FMapProperty* MapProp = CastField<FMapProperty>(Prop))
+				{
+					FScriptMapHelper MapHelper(MapProp, MapProp->ContainerPtrToValuePtr<void>(BindingUObj));
+					for (int32 MapIdx = 0; MapIdx < MapHelper.GetMaxIndex(); ++MapIdx)
+					{
+						if (!MapHelper.IsValidIndex(MapIdx)) continue;
+						const FName* Key = reinterpret_cast<const FName*>(MapHelper.GetKeyPtr(MapIdx));
+						const FAnimGraphNodePropertyBinding* Val = reinterpret_cast<const FAnimGraphNodePropertyBinding*>(MapHelper.GetValuePtr(MapIdx));
+						if (Key && Val && !Val->PathAsText.IsEmpty())
+						{
+							BindingsObj->SetStringField(Key->ToString(), Val->PathAsText.ToString());
+						}
+					}
+				}
+			}
+		}
+
+		if (BindingsObj->Values.Num() > 0)
+		{
+			NodeObj->SetObjectField(TEXT("property_access"), BindingsObj);
+		}
+	}
+
 	return NodeObj;
 }

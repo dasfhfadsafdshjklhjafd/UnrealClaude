@@ -7,6 +7,7 @@
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/DeclarativeSyntaxSupport.h"
 
+class SMultiLineEditableText;
 class SMultiLineEditableTextBox;
 class SScrollBox;
 class SVerticalBox;
@@ -117,7 +118,7 @@ private:
 	FString StreamingResponse;
 
 	/** Current streaming message widget (for updating in place) */
-	TSharedPtr<STextBlock> StreamingTextBlock;
+	TSharedPtr<SMultiLineEditableText> StreamingTextBlock;
 
 	/** Inner content box for streaming bubble (holds text segments + tool indicators) */
 	TSharedPtr<SVerticalBox> StreamingContentBox;
@@ -141,7 +142,7 @@ private:
 	TArray<FString> AllTextSegments;
 
 	/** Text block widgets for each segment (for code block post-processing) */
-	TArray<TSharedPtr<STextBlock>> TextSegmentBlocks;
+	TArray<TSharedPtr<SMultiLineEditableText>> TextSegmentBlocks;
 
 	/** Container vertical boxes wrapping each text segment (for code block replacement) */
 	TArray<TSharedPtr<SVerticalBox>> TextSegmentContainers;

@@ -98,10 +98,10 @@ void SChatMessage::Construct(const FArguments& InArgs)
 				+ SVerticalBox::Slot()
 				.AutoHeight()
 				[
-					SNew(STextBlock)
+					SNew(SMultiLineEditableText)
+					.IsReadOnly(true)
 					.Text(FText::FromString(Message))
 					.TextStyle(FAppStyle::Get(), "NormalText")
-					.ColorAndOpacity(FSlateColor(TextColor))
 					.AutoWrapText(true)
 				]
 			]
@@ -650,10 +650,10 @@ void SClaudeEditorWidget::StartStreamingResponse()
 			+ SVerticalBox::Slot()
 			.AutoHeight()
 			[
-				SAssignNew(StreamingTextBlock, STextBlock)
+				SAssignNew(StreamingTextBlock, SMultiLineEditableText)
+				.IsReadOnly(true)
 				.Text(FText::FromString(TEXT("Thinking...")))
 				.TextStyle(FAppStyle::Get(), "NormalText")
-				.ColorAndOpacity(FSlateColor(FLinearColor::White))
 				.AutoWrapText(true)
 			]
 		];
@@ -873,10 +873,10 @@ void SClaudeEditorWidget::HandleToolUseEvent(const FClaudeStreamEvent& Event)
 			+ SVerticalBox::Slot()
 			.AutoHeight()
 			[
-				SAssignNew(StreamingTextBlock, STextBlock)
+				SAssignNew(StreamingTextBlock, SMultiLineEditableText)
+				.IsReadOnly(true)
 				.Text(FText::GetEmpty())
 				.TextStyle(FAppStyle::Get(), "NormalText")
-				.ColorAndOpacity(FSlateColor(FLinearColor::White))
 				.AutoWrapText(true)
 			]
 		];
@@ -1204,7 +1204,7 @@ void SClaudeEditorWidget::ParseAndRenderCodeBlocks()
 {
 	for (int32 i = 0; i < TextSegmentBlocks.Num() && i < TextSegmentContainers.Num(); ++i)
 	{
-		TSharedPtr<STextBlock> Block = TextSegmentBlocks[i];
+		TSharedPtr<SMultiLineEditableText> Block = TextSegmentBlocks[i];
 		TSharedPtr<SVerticalBox> Container = TextSegmentContainers[i];
 
 		if (!Block.IsValid() || !Container.IsValid())
@@ -1268,10 +1268,10 @@ void SClaudeEditorWidget::ParseAndRenderCodeBlocks()
 				Container->AddSlot()
 				.AutoHeight()
 				[
-					SNew(STextBlock)
+					SNew(SMultiLineEditableText)
+					.IsReadOnly(true)
 					.Text(FText::FromString(Section.Key))
 					.TextStyle(FAppStyle::Get(), "NormalText")
-					.ColorAndOpacity(FSlateColor(FLinearColor::White))
 					.AutoWrapText(true)
 				];
 			}

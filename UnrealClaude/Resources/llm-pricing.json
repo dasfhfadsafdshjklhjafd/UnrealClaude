@@ -1,0 +1,65 @@
+{
+  "version_date": "2026-03-28",
+  "models": {
+    "claude-opus-4-6": {
+      "provider": "anthropic",
+      "input_per_1m": 15.00,
+      "output_per_1m": 75.00,
+      "cached_input_per_1m": 1.50
+    },
+    "claude-sonnet-4-6": {
+      "provider": "anthropic",
+      "input_per_1m": 3.00,
+      "output_per_1m": 15.00,
+      "cached_input_per_1m": 0.30
+    },
+    "claude-haiku-4-5-20251001": {
+      "provider": "anthropic",
+      "input_per_1m": 0.80,
+      "output_per_1m": 4.00,
+      "cached_input_per_1m": 0.08
+    },
+    "gpt-4o": {
+      "provider": "openai",
+      "input_per_1m": 2.50,
+      "output_per_1m": 10.00,
+      "cached_input_per_1m": 1.25
+    },
+    "gpt-4o-mini": {
+      "provider": "openai",
+      "input_per_1m": 0.15,
+      "output_per_1m": 0.60,
+      "cached_input_per_1m": 0.075
+    },
+    "gpt-5.2-codex": {
+      "provider": "openai",
+      "input_per_1m": 2.00,
+      "output_per_1m": 8.00,
+      "cached_input_per_1m": 0.50
+    },
+    "gpt-5.4": {
+      "provider": "openai",
+      "input_per_1m": 5.00,
+      "output_per_1m": 15.00,
+      "cached_input_per_1m": 1.25
+    },
+    "gpt-5.4-mini": {
+      "provider": "openai",
+      "input_per_1m": 0.30,
+      "output_per_1m": 1.20,
+      "cached_input_per_1m": 0.15
+    },
+    "o3": {
+      "provider": "openai",
+      "input_per_1m": 10.00,
+      "output_per_1m": 40.00,
+      "cached_input_per_1m": 2.50
+    },
+    "o4-mini": {
+      "provider": "openai",
+      "input_per_1m": 1.10,
+      "output_per_1m": 4.40,
+      "cached_input_per_1m": 0.275
+    }
+  }
+}

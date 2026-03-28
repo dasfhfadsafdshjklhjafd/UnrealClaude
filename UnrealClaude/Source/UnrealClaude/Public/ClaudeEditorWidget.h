@@ -12,6 +12,7 @@ class SMultiLineEditableTextBox;
 class SScrollBox;
 class SVerticalBox;
 class SClaudeInputArea;
+class SClaudeToolbar;
 class SExpandableArea;
 
 /**
@@ -171,6 +172,9 @@ private:
 	/** Tool call IDs in current group (for showing/hiding labels on transition) */
 	TArray<FString> ToolGroupCallIds;
 
+	/** Toolbar widget (kept to call RefreshModelOptions on backend change) */
+	TSharedPtr<SClaudeToolbar> ToolbarWidget;
+
 	/** Include UE5.7 context in prompts */
 	bool bIncludeUE57Context = true;
 
@@ -179,6 +183,18 @@ private:
 
 	/** Selected Claude model */
 	FString SelectedModel = TEXT("claude-sonnet-4-6");
+
+	/** Whether Claude models use CLI (true) or direct API (false) */
+	bool bAnthropicUseCLI = true;
+
+	/** Handle Anthropic mode toggle (CLI vs API) */
+	void OnAnthropicModeChanged(bool bUseCLI);
+
+	/** Handle model change — auto-resolve backend */
+	void OnModelChangedWithBackendResolve(const FString& NewModelId);
+
+	/** Open role config UI */
+	void OpenRoleConfig();
 
 	/** Accumulated input token count for the current session */
 	int32 SessionInputTokens = 0;

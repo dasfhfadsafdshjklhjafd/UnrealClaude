@@ -8,6 +8,9 @@
 #include "ProjectContext.h"
 #include "MCP/UnrealClaudeMCPServer.h"
 #include "MCP/MCPToolRegistry.h"
+#include "LLM/LLMTokenTracker.h"
+#include "LLM/LLMBackendRegistry.h"
+#include "LLM/LLMRoleConfig.h"
 #include "Widgets/SClaudeToolbar.h"
 #include "Widgets/SClaudeInputArea.h"
 
@@ -169,7 +172,7 @@ void SClaudeEditorWidget::Construct(const FArguments& InArgs)
 	// Check Claude availability on startup
 	if (!IsClaudeAvailable())
 	{
-		AddMessage(TEXT("⚠️ Claude CLI not found.\n\nPlease install Claude Code:\n  npm install -g @anthropic-ai/claude-code\n\nThen authenticate:\n  claude auth login"), false);
+		AddMessage(TEXT("⚠️ Claude CLI not found.\n\nPlease install Claude Code:\n  npm install -g @anthropic-ai/claude-code\n\nThen authenticate:\n  claude auth login\n\nAlternatively, configure an API key in the backend selector (Anthropic API or OpenAI API)."), false);
 	}
 	else
 	{
@@ -191,7 +194,7 @@ SClaudeEditorWidget::~SClaudeEditorWidget()
 
 TSharedRef<SWidget> SClaudeEditorWidget::BuildToolbar()
 {
-	return SNew(SClaudeToolbar)
+	SAssignNew(ToolbarWidget, SClaudeToolbar)
 		.bUE57ContextEnabled_Lambda([this]() { return bIncludeUE57Context; })
 		.bProjectContextEnabled_Lambda([this]() { return bIncludeProjectContext; })
 		.bRestoreEnabled_Lambda([this]() { return FClaudeCodeSubsystem::Get().HasSavedSession(); })
@@ -204,7 +207,9 @@ TSharedRef<SWidget> SClaudeEditorWidget::BuildToolbar()
 		.OnCopyLast_Lambda([this]() { CopyToClipboard(); })
 		.OnCopyChat_Lambda([this]() { CopyWholeChat(); })
 		.OnCompact_Lambda([this]() { CompactSession(); })
+		.OnRoleConfig_Lambda([this]() { OpenRoleConfig(); })
 		.SelectedModel_Lambda([this]() { return SelectedModel; })
+		.bAnthropicUseCLI_Lambda([this]() { return bAnthropicUseCLI; })
 		.TokenCountText_Lambda([this]() -> FText
 		{
 			int32 TotalK = (SessionInputTokens + SessionOutputTokens + 999) / 1000;
@@ -218,11 +223,66 @@ TSharedRef<SWidget> SClaudeEditorWidget::BuildToolbar()
 			if (Total > 80000)  return FSlateColor(FLinearColor(1.0f, 0.7f, 0.1f));
 			return FSlateColor(FLinearColor(0.5f, 0.5f, 0.55f));
 		})
+		.CostText_Lambda([this]() -> FText
+		{
+			FLLMTokenTracker& Tracker = FClaudeCodeSubsystem::Get().GetTokenTracker();
+			FLLMDailyUsageEntry Today = Tracker.GetTodayUsage().GetDayTotal();
+			FLLMDailyUsageEntry Session = Tracker.GetSessionTotal();
+			if (Session.RequestCount == 0 && Today.CostUsd <= 0.0f) return FText::GetEmpty();
+			return FText::FromString(FString::Printf(TEXT("$%.2f today"), Today.CostUsd));
+		})
 		.OnModelChanged_Lambda([this](const FString& NewModel)
 		{
-			SelectedModel = NewModel;
-			FClaudeCodeSubsystem::Get().SetModel(NewModel);
+			OnModelChangedWithBackendResolve(NewModel);
+		})
+		.OnAnthropicModeChanged_Lambda([this](bool bUseCLI)
+		{
+			OnAnthropicModeChanged(bUseCLI);
 		});
+
+	return ToolbarWidget.ToSharedRef();
+}
+
+void SClaudeEditorWidget::OnModelChangedWithBackendResolve(const FString& NewModelId)
+{
+	SelectedModel = NewModelId;
+	FClaudeCodeSubsystem::Get().SetModel(NewModelId);
+
+	// Auto-resolve backend from model
+	FString ResolvedBackend = FClaudeCodeSubsystem::Get().GetBackendRegistry().ResolveBackendForModel(NewModelId);
+	FClaudeCodeSubsystem::Get().SetActiveBackendId(ResolvedBackend);
+}
+
+void SClaudeEditorWidget::OnAnthropicModeChanged(bool bUseCLI)
+{
+	bAnthropicUseCLI = bUseCLI;
+	FString Mode = bUseCLI ? TEXT("claude-code") : TEXT("anthropic-api");
+	FClaudeCodeSubsystem::Get().GetBackendRegistry().SetAnthropicMode(Mode);
+
+	// Refresh model list (deduplicates Claude models based on mode)
+	if (ToolbarWidget.IsValid())
+	{
+		ToolbarWidget->RefreshModelOptions();
+	}
+
+	// Re-resolve current model's backend
+	FString ResolvedBackend = FClaudeCodeSubsystem::Get().GetBackendRegistry().ResolveBackendForModel(SelectedModel);
+	FClaudeCodeSubsystem::Get().SetActiveBackendId(ResolvedBackend);
+}
+
+void SClaudeEditorWidget::OpenRoleConfig()
+{
+	// TODO: Open a modal/flyout showing role assignments
+	// For now, log the current assignments
+	FLLMRoleManager& RoleManager = FClaudeCodeSubsystem::Get().GetRoleManager();
+	FString ConfigSummary = TEXT("Current role assignments:\n");
+	for (EModelRole Role : GetAllModelRoles())
+	{
+		FModelRoleAssignment A = RoleManager.GetAssignment(Role);
+		ConfigSummary += FString::Printf(TEXT("  %s: %s (%s)\n"),
+			*GetModelRoleDisplayName(Role), *A.ModelId, *A.ProviderId);
+	}
+	AddMessage(ConfigSummary, false);
 }
 
 TSharedRef<SWidget> SClaudeEditorWidget::BuildChatArea()

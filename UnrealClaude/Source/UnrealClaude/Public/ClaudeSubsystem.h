@@ -4,10 +4,15 @@
 
 #include "CoreMinimal.h"
 #include "IClaudeRunner.h"
+#include "LLM/ILLMBackend.h"
 
 // Forward declarations
 class FClaudeSessionManager;
 class FClaudeCodeRunner;
+class FLLMBackendRegistry;
+class FLLMRoleManager;
+class FLLMTokenTracker;
+class FLLMPricingConfig;
 
 /**
  * Options for sending a prompt to Claude
@@ -108,14 +113,58 @@ public:
 	/** Get the runner interface (for testing/mocking) */
 	IClaudeRunner* GetRunner() const;
 
+	// ---- Multi-Backend API ----
+
+	/** Get the backend registry */
+	FLLMBackendRegistry& GetBackendRegistry();
+
+	/** Get the role manager */
+	FLLMRoleManager& GetRoleManager();
+
+	/** Get the token tracker */
+	FLLMTokenTracker& GetTokenTracker();
+
+	/** Get the pricing config */
+	FLLMPricingConfig& GetPricingConfig();
+
+	/** Get/Set the active backend provider ID (e.g. "claude-code", "anthropic-api", "openai-api") */
+	void SetActiveBackendId(const FString& ProviderId);
+	const FString& GetActiveBackendId() const { return ActiveBackendId; }
+
+	/** Get the active backend (resolved from ActiveBackendId). May return nullptr. */
+	ILLMBackend* GetActiveBackend() const;
+
+	/**
+	 * Send a prompt through the active LLM backend.
+	 * Routes through the ILLMBackend interface for API backends,
+	 * or falls back to the CLI runner for "claude-code".
+	 */
+	void SendPromptViaBackend(
+		const FString& Prompt,
+		FOnLLMTurnComplete OnComplete,
+		const FClaudePromptOptions& Options = FClaudePromptOptions(),
+		EModelRole Role = EModelRole::Worker
+	);
+
 private:
 	FClaudeCodeSubsystem();
 
 	/** Build prompt with conversation history context */
 	FString BuildPromptWithHistory(const FString& NewPrompt) const;
 
+	/** Initialize the LLM backend system */
+	void InitializeLLMSystem();
+
 	TUniquePtr<FClaudeCodeRunner> Runner;
 	TUniquePtr<FClaudeSessionManager> SessionManager;
 	FString CustomSystemPrompt;
 	FString SelectedModel = TEXT("claude-sonnet-4-6");
+
+	// ---- Multi-Backend Members ----
+	TUniquePtr<FLLMBackendRegistry> BackendRegistry;
+	TUniquePtr<FLLMRoleManager> RoleManager;
+	TUniquePtr<FLLMTokenTracker> TokenTracker;
+	TUniquePtr<FLLMPricingConfig> PricingConfig;
+	FString ActiveBackendId = TEXT("claude-code");
+	FLLMSessionHandle ActiveSession;
 };

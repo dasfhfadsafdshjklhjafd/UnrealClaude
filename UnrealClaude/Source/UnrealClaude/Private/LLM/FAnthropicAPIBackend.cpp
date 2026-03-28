@@ -469,7 +469,7 @@ FString FAnthropicAPIBackend::BuildRequestBody(FLLMSessionState& Session, const 
 	}
 
 	// Tools — include all MCP tools for Anthropic
-	TArray<TSharedPtr<FJsonValue>> ToolDefs = FLLMToolCaller::GetToolsForAnthropic(EToolFilter::All);
+	TArray<TSharedPtr<FJsonValue>> ToolDefs = FLLMToolCaller::GetToolsForAnthropic(EToolFilter::ReadOnly);
 	if (ToolDefs.Num() > 0)
 	{
 		Root->SetArrayField(TEXT("tools"), ToolDefs);

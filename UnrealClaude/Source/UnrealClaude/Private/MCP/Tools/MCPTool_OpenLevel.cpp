@@ -72,25 +72,21 @@ FMCPToolResult FMCPTool_OpenLevel::Execute(const TSharedRef<FJsonObject>& Params
 
 	Action = Action.ToLower().TrimStartAndEnd();
 
-	if (Action == TEXT("open"))
+	// Read-only guard — only list_templates is allowed
+	static const TSet<FString> AllowedOps = { TEXT("list_templates") };
+	if (!AllowedOps.Contains(Action))
 	{
-		return ExecuteOpen(Params);
+		return FMCPToolResult::Error(FString::Printf(
+			TEXT("Operation '%s' is disabled (read-only mode). Only 'list_templates' is available."), *Action));
 	}
-	else if (Action == TEXT("new"))
-	{
-		return ExecuteNew(Params);
-	}
-	else if (Action == TEXT("save_as"))
-	{
-		return ExecuteSaveAs(Params);
-	}
-	else if (Action == TEXT("list_templates"))
+
+	if (Action == TEXT("list_templates"))
 	{
 		return ExecuteListTemplates();
 	}
 
 	return FMCPToolResult::Error(FString::Printf(
-		TEXT("Unknown action: '%s'. Use 'open', 'new', 'save_as', or 'list_templates'."), *Action));
+		TEXT("Unknown action: '%s'. Use 'list_templates'."), *Action));
 }
 
 FMCPToolResult FMCPTool_OpenLevel::ExecuteOpen(const TSharedRef<FJsonObject>& Params)

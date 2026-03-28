@@ -6,13 +6,9 @@
 #include "MCP/MCPToolBase.h"
 
 /**
- * MCP Tool: Open, create, or list level maps in the editor
+ * MCP Tool: List level map templates in the editor (read-only)
  *
- * Supports four actions:
- * - "open": Load an existing map by path
- * - "new": Create a new blank map or from a template
- * - "save_as": Save current level to a specified path
- * - "list_templates": List available map templates
+ * Only 'list_templates' is enabled. Open/new/save_as are disabled (read-only mode).
  */
 class FMCPTool_OpenLevel : public FMCPToolBase
 {
@@ -43,7 +39,7 @@ public:
 			FMCPToolParameter(TEXT("save_path"), TEXT("string"),
 				TEXT("Asset path to save the level to (required for 'save_as' action, e.g., '/Game/Maps/MyLevel')"), false)
 		};
-		Info.Annotations = FMCPToolAnnotations::Modifying();
+		Info.Annotations = FMCPToolAnnotations::ReadOnly();
 		return Info;
 	}
 

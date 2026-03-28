@@ -476,7 +476,7 @@ FString FOpenAIAPIBackend::BuildRequestBody(FLLMSessionState& Session, const FSt
 	TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
 
 	Root->SetStringField(TEXT("model"), ModelId);
-	Root->SetNumberField(TEXT("max_tokens"), MaxTokens);
+	Root->SetNumberField(TEXT("max_completion_tokens"), MaxTokens);
 
 	// Tools — READ-ONLY only for OpenAI
 	TArray<TSharedPtr<FJsonValue>> ToolDefs = FLLMToolCaller::GetToolsForOpenAI(EToolFilter::ReadOnly);

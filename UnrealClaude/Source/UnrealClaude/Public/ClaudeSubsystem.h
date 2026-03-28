@@ -38,6 +38,9 @@ struct UNREALCLAUDE_API FClaudePromptOptions
 	/** Role for this request (controls write permissions — only DocsAgent can write) */
 	EModelRole Role = EModelRole::Worker;
 
+	/** Model override for CLI path (set by SendPromptViaBackend when routing role requests) */
+	FString ModelOverride;
+
 	/** Default constructor with sensible defaults */
 	FClaudePromptOptions() = default;
 

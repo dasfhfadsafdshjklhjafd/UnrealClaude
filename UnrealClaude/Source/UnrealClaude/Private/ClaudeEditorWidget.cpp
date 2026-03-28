@@ -524,7 +524,18 @@ void SClaudeEditorWidget::SendMessage()
 	bIsWaitingForResponse = true;
 
 	// Capture model name at send time so it persists through async response
-	CurrentResponseModelName = SClaudeToolbar::GetModelDisplayName(SelectedModel);
+	if (SelectedSendRole != EModelRole::Worker)
+	{
+		FString RoleName = GetModelRoleDisplayName(SelectedSendRole);
+		FLLMRoleManager& RoleManager = FClaudeCodeSubsystem::Get().GetRoleManager();
+		FModelRoleAssignment Assignment = RoleManager.GetAssignment(SelectedSendRole);
+		CurrentResponseModelName = SClaudeToolbar::GetModelDisplayName(Assignment.ModelId)
+			+ TEXT(" (") + RoleName + TEXT(")");
+	}
+	else
+	{
+		CurrentResponseModelName = SClaudeToolbar::GetModelDisplayName(SelectedModel);
+	}
 
 	// Start streaming response display
 	StartStreamingResponse();
@@ -559,15 +570,11 @@ void SClaudeEditorWidget::SendMessage()
 		// Prepend role prompt to user's message
 		FString AugmentedPrompt = RolePrompt.IsEmpty() ? Prompt : (RolePrompt + Prompt);
 
-		// Update label to show the role's model, not the worker model
-		FLLMRoleManager& RoleManager = FClaudeCodeSubsystem::Get().GetRoleManager();
-		FModelRoleAssignment Assignment = RoleManager.GetAssignment(SelectedSendRole);
-		CurrentResponseModelName = SClaudeToolbar::GetModelDisplayName(Assignment.ModelId)
-			+ TEXT(" (") + RoleName + TEXT(")");
-
 		// Temporarily switch to the role's backend
+		FLLMRoleManager& RoleMgr = FClaudeCodeSubsystem::Get().GetRoleManager();
+		FModelRoleAssignment RoleAssignment = RoleMgr.GetAssignment(SelectedSendRole);
 		FString PreviousBackend = FClaudeCodeSubsystem::Get().GetActiveBackendId();
-		FClaudeCodeSubsystem::Get().SetActiveBackendId(Assignment.ProviderId);
+		FClaudeCodeSubsystem::Get().SetActiveBackendId(RoleAssignment.ProviderId);
 		FClaudeCodeSubsystem::Get().SendPromptViaBackend(AugmentedPrompt, OnTurnComplete, Options, SelectedSendRole);
 
 		// Restore previous backend after send (the async callback handles completion)
@@ -1057,6 +1064,11 @@ void SClaudeEditorWidget::OnClaudeStreamEvent(const FClaudeStreamEvent& Event)
 
 	case EClaudeStreamEventType::TextContent:
 		UE_LOG(LogUnrealClaude, Log, TEXT("[StreamEvent] TextContent: %d chars"), Event.Text.Len());
+		// For API backends, render text via OnClaudeProgress (CLI already does this via its own OnProgress callback)
+		if (FClaudeCodeSubsystem::Get().IsAPIBackend())
+		{
+			OnClaudeProgress(Event.Text);
+		}
 		break;
 
 	case EClaudeStreamEventType::ToolUse:

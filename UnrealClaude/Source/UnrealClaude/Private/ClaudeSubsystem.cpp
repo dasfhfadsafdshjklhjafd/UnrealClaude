@@ -91,7 +91,7 @@ void FClaudeCodeSubsystem::SendPrompt(
 			TEXT("Write(Docs/**)"), TEXT("Write(ARCHITECTURE.md)"),
 		});
 	}
-	Config.Model = SelectedModel;
+	Config.Model = Options.ModelOverride.IsEmpty() ? SelectedModel : Options.ModelOverride;
 
 	Config.AttachedImagePaths = Options.AttachedImagePaths;
 
@@ -467,17 +467,20 @@ void FClaudeCodeSubsystem::SetActiveBackendId(const FString& ProviderId)
 {
 	if (BackendRegistry->HasBackend(ProviderId))
 	{
-		ActiveBackendId = ProviderId;
-
-		// Destroy old session if backend changed
-		ILLMBackend* Backend = GetActiveBackend();
-		if (Backend && ActiveSession.IsValid())
+		// Only destroy session if backend actually changes
+		if (ActiveBackendId != ProviderId)
 		{
-			Backend->DestroySession(ActiveSession);
-			ActiveSession = FLLMSessionHandle::Invalid();
-		}
+			// Destroy session on the OLD backend before switching
+			ILLMBackend* OldBackend = GetActiveBackend();
+			if (OldBackend && ActiveSession.IsValid())
+			{
+				OldBackend->DestroySession(ActiveSession);
+				ActiveSession = FLLMSessionHandle::Invalid();
+			}
 
-		UE_LOG(LogUnrealClaude, Log, TEXT("Active backend set to: %s"), *ProviderId);
+			ActiveBackendId = ProviderId;
+			UE_LOG(LogUnrealClaude, Log, TEXT("Active backend set to: %s"), *ProviderId);
+		}
 	}
 	else
 	{
@@ -496,12 +499,21 @@ void FClaudeCodeSubsystem::SendPromptViaBackend(
 	const FClaudePromptOptions& Options,
 	EModelRole Role)
 {
+	// Resolve model: use role assignment if it targets this backend, else use selected model
+	FModelRoleAssignment Assignment = RoleManager->GetAssignment(Role);
+	FString ModelId = SelectedModel;
+	FString AssignmentBackend = BackendRegistry->ResolveBackendForModel(Assignment.ModelId);
+	if (AssignmentBackend == ActiveBackendId)
+	{
+		ModelId = Assignment.ModelId;
+	}
+
 	// If using Claude Code CLI backend, delegate to existing SendPrompt path
 	if (ActiveBackendId == TEXT("claude-code"))
 	{
 		// Wrap the LLM callback into the legacy callback format
 		FOnClaudeResponse LegacyComplete;
-		LegacyComplete.BindLambda([this, OnComplete, Role](const FString& Response, bool bSuccess)
+		LegacyComplete.BindLambda([this, OnComplete, Role, ModelId](const FString& Response, bool bSuccess)
 		{
 			FLLMTurnResult Result;
 			Result.ResponseText = Response;
@@ -512,7 +524,7 @@ void FClaudeCodeSubsystem::SendPromptViaBackend(
 			}
 			// Token usage will be populated from stream events
 			Result.TokenUsage.ProviderId = TEXT("claude-code");
-			Result.TokenUsage.ModelId = SelectedModel;
+			Result.TokenUsage.ModelId = ModelId;
 			Result.TokenUsage.Role = Role;
 
 			if (OnComplete.IsBound())
@@ -521,9 +533,10 @@ void FClaudeCodeSubsystem::SendPromptViaBackend(
 			}
 		});
 
-		// Pass role through so SendPrompt can restrict write permissions
+		// Pass role and resolved model through so SendPrompt uses the right model
 		FClaudePromptOptions CLIOptions = Options;
 		CLIOptions.Role = Role;
+		CLIOptions.ModelOverride = ModelId;
 		SendPrompt(Prompt, LegacyComplete, CLIOptions);
 		return;
 	}
@@ -583,16 +596,7 @@ void FClaudeCodeSubsystem::SendPromptViaBackend(
 		ActiveSession = Backend->CreateTaskSession(SystemPrompt);
 	}
 
-	// Resolve model: use role assignment if it targets this backend, else use selected model
-	FModelRoleAssignment Assignment = RoleManager->GetAssignment(Role);
-	FString ModelId = SelectedModel;
-	FString AssignmentBackend = BackendRegistry->ResolveBackendForModel(Assignment.ModelId);
-	if (AssignmentBackend == ActiveBackendId)
-	{
-		ModelId = Assignment.ModelId;
-	}
-
-	// Submit turn
+	// Submit turn (ModelId already resolved above, before the CLI early-return)
 	FOnLLMTurnComplete WrappedComplete;
 	WrappedComplete.BindLambda([this, Prompt, OnComplete, Role, ModelId](const FLLMTurnResult& Result)
 	{
@@ -622,11 +626,23 @@ void FClaudeCodeSubsystem::SendPromptViaBackend(
 		}
 	});
 
+	// Bridge FOnClaudeStreamEvent → FOnLLMStreamProgress (same signature, different delegate types)
+	FOnLLMStreamProgress StreamProgress;
+	if (Options.OnStreamEvent.IsBound())
+	{
+		FOnClaudeStreamEvent StreamDelegate = Options.OnStreamEvent;
+		StreamProgress.BindLambda([StreamDelegate](const FClaudeStreamEvent& Event)
+		{
+			StreamDelegate.ExecuteIfBound(Event);
+		});
+	}
+
 	Backend->SubmitTurn(
 		ActiveSession,
 		Prompt,
 		Options.AttachedImagePaths,
 		ModelId,
-		WrappedComplete
+		WrappedComplete,
+		StreamProgress
 	);
 }

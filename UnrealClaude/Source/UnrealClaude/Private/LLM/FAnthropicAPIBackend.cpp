@@ -382,6 +382,19 @@ void FAnthropicAPIBackend::HandleResponse(
 
 	FLLMTurnResult Result = FLLMTurnResult::Success(*AccumulatedText, *AccumulatedUsage);
 
+	// Emit Result event so the UI can show stats footer (matching CLI behavior)
+	if (OnProgress.IsBound())
+	{
+		FClaudeStreamEvent ResultEvent;
+		ResultEvent.Type = EClaudeStreamEventType::Result;
+		ResultEvent.ResultText = *AccumulatedText;
+		ResultEvent.InputTokens = AccumulatedUsage->InputTokens;
+		ResultEvent.OutputTokens = AccumulatedUsage->OutputTokens;
+		ResultEvent.TotalCostUsd = AccumulatedUsage->EstimatedCostUsd;
+		ResultEvent.NumTurns = ToolLoopCount + 1;
+		OnProgress.Execute(ResultEvent);
+	}
+
 	if (OnComplete.IsBound())
 	{
 		OnComplete.Execute(Result);

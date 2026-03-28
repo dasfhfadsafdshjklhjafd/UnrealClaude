@@ -648,47 +648,81 @@ void SClaudeEditorWidget::CompactSession()
 	bIsWaitingForResponse = true;
 	StreamingStartTime = FPlatformTime::Seconds();
 
-	FClaudeRequestConfig Config;
-	Config.Prompt = CompactPrompt;
-	Config.WorkingDirectory = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
-	Config.bSkipPermissions = true;
-	Config.Model = SelectedModel;
-	// No OnStreamEvent — we handle the result in OnComplete only
+	// Shared completion handler for both CLI and API paths
+	auto OnCompactComplete = [this](const FString& Summary, bool bSuccess)
+	{
+		bIsWaitingForResponse = false;
+		ResetStreamingState();
 
-	FClaudeCodeSubsystem::Get().GetRunner()->ExecuteAsync(
-		Config,
-		FOnClaudeResponse::CreateLambda([this](const FString& Summary, bool bSuccess)
+		if (bSuccess && !Summary.IsEmpty())
+		{
+			// Clear chat display and history
+			if (ChatMessagesBox.IsValid())
+			{
+				ChatMessagesBox->ClearChildren();
+			}
+			FClaudeCodeSubsystem::Get().ClearHistory();
+			SessionInputTokens = 0;
+			SessionOutputTokens = 0;
+
+			// Inject summary as a single history exchange so BuildPromptWithHistory includes it
+			FClaudeCodeSubsystem::Get().AddExchange(
+				TEXT("[Previous conversation — summarized]"),
+				Summary
+			);
+
+			// Show the summary in chat
+			AddMessage(TEXT("[Session compacted — summary injected as context for next message]"), false);
+			AddMessage(Summary, false);
+		}
+		else
+		{
+			AddMessage(FString::Printf(TEXT("Compact failed: %s"), *Summary), false);
+		}
+	};
+
+	FClaudeCodeSubsystem& Subsystem = FClaudeCodeSubsystem::Get();
+
+	if (Subsystem.GetActiveBackendId() == TEXT("claude-code"))
+	{
+		// CLI path — use runner directly (no context injection needed for summarization)
+		FClaudeRequestConfig Config;
+		Config.Prompt = CompactPrompt;
+		Config.WorkingDirectory = FPaths::ConvertRelativePathToFull(FPaths::ProjectDir());
+		Config.bSkipPermissions = true;
+		Config.Model = SelectedModel;
+
+		Subsystem.GetRunner()->ExecuteAsync(Config,
+			FOnClaudeResponse::CreateLambda(OnCompactComplete));
+	}
+	else
+	{
+		// API backend path — send through active backend directly
+		ILLMBackend* Backend = Subsystem.GetActiveBackend();
+		if (!Backend || !Backend->IsAvailable())
 		{
 			bIsWaitingForResponse = false;
-			ResetStreamingState();
+			AddMessage(TEXT("Compact failed: backend not available"), false);
+			return;
+		}
 
-			if (bSuccess && !Summary.IsEmpty())
+		// Create a temporary session with minimal system prompt (just summarization task)
+		FLLMSessionHandle CompactSession = Backend->CreateTaskSession(
+			TEXT("You are a summarization assistant. Produce a concise, thorough summary when asked."));
+
+		Backend->SubmitTurn(
+			CompactSession,
+			CompactPrompt,
+			{}, // no images
+			SelectedModel,
+			FOnLLMTurnComplete::CreateLambda([this, Backend, CompactSession, OnCompactComplete](const FLLMTurnResult& Result)
 			{
-				// Clear chat display and history
-				if (ChatMessagesBox.IsValid())
-				{
-					ChatMessagesBox->ClearChildren();
-				}
-				FClaudeCodeSubsystem::Get().ClearHistory();
-				SessionInputTokens = 0;
-				SessionOutputTokens = 0;
-
-				// Inject summary as a single history exchange so BuildPromptWithHistory includes it
-				FClaudeCodeSubsystem::Get().AddExchange(
-					TEXT("[Previous conversation — summarized]"),
-					Summary
-				);
-
-				// Show the summary in chat
-				AddMessage(TEXT("[Session compacted — summary injected as context for next message]"), false);
-				AddMessage(Summary, false);
-			}
-			else
-			{
-				AddMessage(FString::Printf(TEXT("Compact failed: %s"), *Summary), false);
-			}
-		})
-	);
+				// Clean up temporary session
+				Backend->DestroySession(CompactSession);
+				OnCompactComplete(Result.ResponseText, Result.bSuccess);
+			})
+		);
+	}
 }
 
 void SClaudeEditorWidget::RestoreSession()

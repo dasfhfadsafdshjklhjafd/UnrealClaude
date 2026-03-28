@@ -1,3 +1,56 @@
-Please produce a concise summary of the conversation below.
-Preserve all key technical decisions, facts, file paths, Blueprint names, and any open questions.
-This summary will replace the full history as the context for our next exchange, so be thorough but compact.
+# Context Compaction Prompt
+
+Produce a structured summary of the conversation below. This summary **replaces the full history** as context for our next exchange — anything not captured here is lost.
+
+## Rules
+
+1. **Current state over history.** If a value, setting, or approach was changed multiple times, record ONLY the final/current state. Do not narrate the journey.
+2. **Failed approaches matter.** Briefly list what was tried and WHY it failed (root cause, not symptoms). This prevents re-suggesting dead ends.
+3. **Node references must be descriptive.** Never use bare node numbers (e.g., "node 16"). Always pair with type + key pins (e.g., "the `Vector - Vector` subtract feeding `AimPoint_Location`"). Node IDs are not visible in the UE5 editor.
+4. **Preserve exact names.** Blueprint names, variable names, socket names, enum values, bone names, file paths — copy verbatim with original casing.
+5. **Preserve exact settings.** For any ModifyBone / AnimGraph node discussed: record Translation Mode, Translation Space, Rotation Mode, Rotation Space, Alpha, and what variable/PropertyAccess feeds it.
+6. **Math must be reproducible.** For any formula or transform chain discussed, write it as a single equation block showing inputs → operation → output → where it's consumed.
+7. **Separate confirmed from unconfirmed.** Mark claims verified in-editor with ✓. Mark assumptions or things inferred from docs/MCP but not tested with ⚠️.
+
+## Required Sections
+
+### Project Context
+- Project name, engine version, multiplayer model, Blueprint-only constraint
+- Any global architectural decisions (e.g., "weapon visual mesh lives on character, not weapon Actor")
+
+### File Paths & Key Assets
+Table of every Blueprint, AnimBP, interface, data asset, skeletal mesh, etc. referenced. Path + one-line role.
+
+### Component Hierarchy
+How key components are parented (e.g., Camera → FirstPersonMesh → WeaponMesh, with parent sockets and relative transforms if discussed).
+
+### Current Issue
+What we're actively working on. Current symptoms. What "done" looks like.
+
+### System Architecture (for the current issue)
+The full data/exec flow relevant to the issue. For AnimGraph chains: list each node in evaluation order with its settings and what feeds it. For EventGraph logic: list the exec chain and data flow with actual pin names.
+
+### What Was Tried & Why It Failed
+Numbered list. Each entry: one-line description of approach → one-line root cause of failure. No more than 2 sentences each.
+
+### Current Implementation State
+Exactly what is wired/configured RIGHT NOW in the editor. Not what we plan to do — what IS done. Flag any temporary debug nodes (Print Strings, forced alphas, etc.) that should be reverted.
+
+### Open Questions / Next Diagnostic Steps
+Bulleted list of unresolved items, pending tests, or information needed from the user.
+
+### Resolved Issues (this conversation)
+Issues that were fully fixed. For each: one-line problem → one-line fix → current state.
+
+### Resolved Issues (prior conversations)
+Carried forward from previous summary if present. Do not expand — keep as-is unless new information invalidates something.
+
+---
+
+**Do not include:**
+- Emotional back-and-forth, frustration, encouragement
+- Repeated re-readings of the same graph (just capture the final understanding)
+- Claude's incorrect intermediate diagnoses (capture only in the "Tried & Failed" section)
+- Conversational filler ("let me check," "good question," "fair point")
+
+**Length target:** Under 3000 words. If the conversation covered multiple unrelated issues, prioritize the OPEN issue. Resolved issues get minimal space.

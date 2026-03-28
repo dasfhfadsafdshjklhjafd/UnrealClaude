@@ -7,17 +7,17 @@ public class UnrealClaude : ModuleRules
 	public UnrealClaude(ReadOnlyTargetRules Target) : base(Target)
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
-		
+
 		PublicIncludePaths.AddRange(
 			new string[] {
 			}
 		);
-				
+
 		PrivateIncludePaths.AddRange(
 			new string[] {
 			}
 		);
-			
+
 		PublicDependencyModuleNames.AddRange(
 			new string[]
 			{
@@ -35,7 +35,7 @@ public class UnrealClaude : ModuleRules
 				"WorkspaceMenuStructure"
 			}
 		);
-			
+
 		PrivateDependencyModuleNames.AddRange(
 			new string[]
 			{
@@ -59,7 +59,14 @@ public class UnrealClaude : ModuleRules
 				// Asset saving
 				"EditorScriptingUtilities",
 				// Enhanced Input
-				"EnhancedInput"
+				"EnhancedInput",
+				// Widget editor (UMG)
+				"UMG",
+				"UMGEditor",
+				// Skeletal mesh vertex/pose operations (set_ref_pose, transform_vertices)
+				"SkeletalMeshDescription",
+				"StaticMeshDescription",
+				"MeshDescription"
 			}
 		);
 

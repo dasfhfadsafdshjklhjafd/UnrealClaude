@@ -6,7 +6,7 @@
 #include "UnrealClaudeConstants.h"
 #include "Containers/Ticker.h"
 
-// READ-ONLY tool set — write/modify/execute/spawn/delete tools intentionally excluded
+// Read-only tools
 #include "Tools/MCPTool_GetLevelActors.h"
 #include "Tools/MCPTool_GetOutputLog.h"
 #include "Tools/MCPTool_GetScriptHistory.h"
@@ -17,6 +17,11 @@
 #include "Tools/MCPTool_AssetDependencies.h"
 #include "Tools/MCPTool_AssetReferencers.h"
 #include "Tools/MCPTool_OpenLevel.h"
+// Modifying tools
+#include "Tools/MCPTool_Widget.h"
+#include "Tools/MCPTool_BlendSpace.h"
+#include "Tools/MCPTool_MontageModify.h"
+#include "Tools/MCPTool_AnimEdit.h"
 
 FMCPToolRegistry::FMCPToolRegistry()
 {
@@ -47,8 +52,9 @@ void FMCPToolRegistry::StopTaskQueue()
 
 void FMCPToolRegistry::RegisterBuiltinTools()
 {
-	UE_LOG(LogUnrealClaude, Log, TEXT("Registering MCP tools (read-only mode)..."));
+	UE_LOG(LogUnrealClaude, Log, TEXT("Registering MCP tools..."));
 
+	// Read-only tools
 	RegisterTool(MakeShared<FMCPTool_GetLevelActors>());
 	RegisterTool(MakeShared<FMCPTool_GetOutputLog>());
 	RegisterTool(MakeShared<FMCPTool_GetScriptHistory>());
@@ -59,6 +65,11 @@ void FMCPToolRegistry::RegisterBuiltinTools()
 	RegisterTool(MakeShared<FMCPTool_AssetDependencies>());
 	RegisterTool(MakeShared<FMCPTool_AssetReferencers>());
 	RegisterTool(MakeShared<FMCPTool_OpenLevel>());
+	// Modifying tools
+	RegisterTool(MakeShared<FMCPTool_Widget>());
+	RegisterTool(MakeShared<FMCPTool_BlendSpace>());
+	RegisterTool(MakeShared<FMCPTool_MontageModify>());
+	RegisterTool(MakeShared<FMCPTool_AnimEdit>());
 
 	UE_LOG(LogUnrealClaude, Log, TEXT("Registered %d MCP tools"), Tools.Num());
 }

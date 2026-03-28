@@ -497,6 +497,22 @@ void SClaudeEditorWidget::SendMessage()
 	// Build prompt - use default if image-only
 	FString Prompt = bHasText ? CurrentInputText : TEXT("Please analyze this image.");
 
+	// Auto-bootstrap: on first message of an API session, prepend session start instruction
+	// This mimics CLI behavior where Claude proactively reads ARCHITECTURE.md and follows the session protocol
+	FClaudeCodeSubsystem& Subsystem = FClaudeCodeSubsystem::Get();
+	bool bIsFirstAPIMessage = Subsystem.IsAPIBackend() && Subsystem.GetHistory().Num() == 0;
+	UE_LOG(LogUnrealClaude, Log, TEXT("SendMessage: IsAPI=%d, HistoryCount=%d, Bootstrap=%d"),
+		Subsystem.IsAPIBackend(), Subsystem.GetHistory().Num(), bIsFirstAPIMessage);
+	if (bIsFirstAPIMessage)
+	{
+		Prompt = TEXT("IMPORTANT — NEW SESSION PROTOCOL:\n")
+			TEXT("This is the first message of a new session. ARCHITECTURE.md and the task board (kanban) ")
+			TEXT("are both already injected into your system context. You have them — reference them directly.\n")
+			TEXT("Before answering, acknowledge the current project state and active tasks from your context.\n")
+			TEXT("Be concise. Use tools to verify any claims about Blueprints or assets.\n\n")
+			TEXT("User message: ") + Prompt;
+	}
+
 	// Clear input
 	CurrentInputText.Empty();
 	if (InputArea.IsValid())

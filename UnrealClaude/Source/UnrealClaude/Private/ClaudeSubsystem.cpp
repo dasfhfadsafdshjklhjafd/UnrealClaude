@@ -176,6 +176,121 @@ FString FClaudeCodeSubsystem::GetProjectInstructionsPrompt() const
 	return FString();
 }
 
+FString FClaudeCodeSubsystem::GetArchitectureContextPrompt() const
+{
+	FString ArchPath = FPaths::Combine(FPaths::ProjectDir(), TEXT("ARCHITECTURE.md"));
+	FString Contents;
+	if (FFileHelper::LoadFileToString(Contents, *ArchPath))
+	{
+		UE_LOG(LogUnrealClaude, Log, TEXT("GetArchitectureContextPrompt: Loaded ARCHITECTURE.md (%d chars)"), Contents.Len());
+		return FString::Printf(TEXT("\n\n--- ARCHITECTURE.md (ground truth — already injected, do NOT attempt to read from disk) ---\n%s"), *Contents);
+	}
+	UE_LOG(LogUnrealClaude, Warning, TEXT("GetArchitectureContextPrompt: ARCHITECTURE.md not found at: %s"), *ArchPath);
+	return FString();
+}
+
+FString FClaudeCodeSubsystem::GetKanbanContextPrompt() const
+{
+	// Extract kanban file path from CLAUDE.md (look for backtick-enclosed path containing "kanban")
+	// This avoids hardcoding an absolute path in C++ — the project's CLAUDE.md is the source of truth
+	FString ClaudeMdPath = FPaths::Combine(FPaths::ProjectDir(), TEXT("CLAUDE.md"));
+	FString ClaudeMd;
+	if (!FFileHelper::LoadFileToString(ClaudeMd, *ClaudeMdPath))
+	{
+		UE_LOG(LogUnrealClaude, Warning, TEXT("GetKanbanContextPrompt: Could not read CLAUDE.md at: %s"), *ClaudeMdPath);
+		return FString();
+	}
+
+	// Find pattern: `<path>/kanban.md` in CLAUDE.md
+	FString KanbanPath;
+	int32 Idx = ClaudeMd.Find(TEXT("kanban.md"), ESearchCase::IgnoreCase);
+	if (Idx == INDEX_NONE)
+	{
+		UE_LOG(LogUnrealClaude, Log, TEXT("GetKanbanContextPrompt: No 'kanban.md' reference found in CLAUDE.md"));
+		return FString();
+	}
+
+	// Walk backward to find opening backtick
+	int32 BacktickStart = INDEX_NONE;
+	for (int32 i = Idx - 1; i >= 0; --i)
+	{
+		if (ClaudeMd[i] == TEXT('`'))
+		{
+			BacktickStart = i + 1;
+			break;
+		}
+		if (ClaudeMd[i] == TEXT('\n'))
+		{
+			UE_LOG(LogUnrealClaude, Warning, TEXT("GetKanbanContextPrompt: Hit newline before finding opening backtick"));
+			break;
+		}
+	}
+	// Walk forward to find closing backtick
+	int32 BacktickEnd = INDEX_NONE;
+	for (int32 i = Idx; i < ClaudeMd.Len(); ++i)
+	{
+		if (ClaudeMd[i] == TEXT('`'))
+		{
+			BacktickEnd = i;
+			break;
+		}
+		if (ClaudeMd[i] == TEXT('\n'))
+		{
+			UE_LOG(LogUnrealClaude, Warning, TEXT("GetKanbanContextPrompt: Hit newline before finding closing backtick"));
+			break;
+		}
+	}
+
+	if (BacktickStart == INDEX_NONE || BacktickEnd == INDEX_NONE)
+	{
+		UE_LOG(LogUnrealClaude, Warning, TEXT("GetKanbanContextPrompt: Could not extract path from backticks (start=%d, end=%d)"), BacktickStart, BacktickEnd);
+		return FString();
+	}
+
+	KanbanPath = ClaudeMd.Mid(BacktickStart, BacktickEnd - BacktickStart);
+	UE_LOG(LogUnrealClaude, Log, TEXT("GetKanbanContextPrompt: Extracted kanban path: '%s'"), *KanbanPath);
+
+	// Normalize path separators
+	KanbanPath.ReplaceInline(TEXT("\\"), TEXT("/"));
+
+	FString KanbanContents;
+	if (FFileHelper::LoadFileToString(KanbanContents, *KanbanPath))
+	{
+		UE_LOG(LogUnrealClaude, Log, TEXT("GetKanbanContextPrompt: Successfully loaded kanban (%d chars)"), KanbanContents.Len());
+		return FString::Printf(TEXT("\n\n--- Task Board (kanban.md — already injected into your context, do NOT attempt to read this file from disk) ---\n%s"), *KanbanContents);
+	}
+
+	UE_LOG(LogUnrealClaude, Warning, TEXT("GetKanbanContextPrompt: Kanban file not found at: %s"), *KanbanPath);
+	return FString();
+}
+
+FString FClaudeCodeSubsystem::GetAPIBehaviorPrompt() const
+{
+	return TEXT(R"(
+
+--- API Backend Behavior Instructions ---
+You are running as a direct API backend (not Claude CLI). Adapt your behavior:
+
+TOOL USAGE — BE AGENTIC:
+- ALWAYS use tools to verify before answering. Do not guess or assume.
+- Chain multiple tool calls: inspect → read → grep → compare → answer.
+- If asked about a Blueprint, use blueprint_query first, THEN read the relevant graph.
+- If asked about a bug, read the output log, inspect the Blueprint, cross-reference ARCHITECTURE.md — THEN diagnose.
+- Never say "I would need to check..." — just check. You have the tools.
+
+RESPONSE STYLE:
+- Be concise and direct. Lead with the answer, not the reasoning.
+- Do not hedge or ask permission to use tools. Just use them.
+- Do not summarize what you just read back to the user unless they asked.
+- Do not repeat the user's question back to them.
+
+CONTEXT ALREADY IN YOUR SYSTEM PROMPT:
+- ARCHITECTURE.md (ground truth decisions) — already injected, do NOT read from disk
+- Task board (kanban.md) — already injected, do NOT read from disk
+- CLAUDE.md (project instructions) — already injected, do NOT read from disk
+- Reference these documents directly from your context. Only use tools for Blueprints, assets, and the output log.)");
+}
+
 void FClaudeCodeSubsystem::SetCustomSystemPrompt(const FString& InCustomPrompt)
 {
 	CustomSystemPrompt = InCustomPrompt;
@@ -448,10 +563,22 @@ void FClaudeCodeSubsystem::SendPromptViaBackend(
 		}
 		// API backends don't auto-discover CLAUDE.md — inject project instructions
 		SystemPrompt += GetProjectInstructionsPrompt();
+		// Inject key project files that MCP tools can't read (they only handle Blueprints/assets)
+		FString ArchitecturePrompt = GetArchitectureContextPrompt();
+		SystemPrompt += ArchitecturePrompt;
+		FString KanbanPrompt = GetKanbanContextPrompt();
+		SystemPrompt += KanbanPrompt;
+		// Inject agentic behavior instructions for API models
+		SystemPrompt += GetAPIBehaviorPrompt();
 		if (!CustomSystemPrompt.IsEmpty())
 		{
 			SystemPrompt += TEXT("\n\n") + CustomSystemPrompt;
 		}
+
+		UE_LOG(LogUnrealClaude, Log, TEXT("API session created — system prompt: %d chars, architecture: %s, kanban: %s"),
+			SystemPrompt.Len(),
+			ArchitecturePrompt.IsEmpty() ? TEXT("NO") : TEXT("YES"),
+			KanbanPrompt.IsEmpty() ? TEXT("NO") : TEXT("YES"));
 
 		ActiveSession = Backend->CreateTaskSession(SystemPrompt);
 	}

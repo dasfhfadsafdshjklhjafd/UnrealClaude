@@ -85,6 +85,18 @@ public:
 	/** Get project instructions from CLAUDE.md (for API backends that don't auto-discover it) */
 	FString GetProjectInstructionsPrompt() const;
 
+	/** Get ARCHITECTURE.md content for injection into API system prompt */
+	FString GetArchitectureContextPrompt() const;
+
+	/** Get kanban/task board content for injection into API system prompt */
+	FString GetKanbanContextPrompt() const;
+
+	/** Get agentic behavior instructions for API backends */
+	FString GetAPIBehaviorPrompt() const;
+
+	/** Check if the active backend is an API (not CLI) */
+	bool IsAPIBackend() const { return ActiveBackendId != TEXT("claude-code"); }
+
 	/** Set custom system prompt additions */
 	void SetCustomSystemPrompt(const FString& InCustomPrompt);
 

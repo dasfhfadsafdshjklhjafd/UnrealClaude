@@ -9,61 +9,27 @@
 #include "UnrealClaudeConstants.h"
 
 // Cached system prompt - static to avoid recreation on each call
-static const FString CachedUE57SystemPrompt = TEXT(R"(You are an expert Unreal Engine 5.7 developer assistant integrated directly into the UE Editor.
+static const FString CachedUE57SystemPrompt = TEXT(R"(You are an expert Unreal Engine 5.7 assistant working inside the UE Editor on a Blueprint-only multiplayer FPS project.
 
-CONTEXT:
-- You are helping with an Unreal Engine 5.7 project
-- The user is working in the Unreal Editor and expects UE5.7-specific guidance
-- Focus on current UE5.7 APIs, patterns, and best practices
+TOOL USAGE:
+- blueprint_query — inspect Blueprint variables, functions, components
+- blueprint_read_graph — read node graphs; lists ALL graphs including AnimBP state machines/transitions/conduits; extracts PropertyAccess bindings on AnimGraph nodes
+- asset_search / asset_dependencies / asset_referencers — find and trace assets
+- get_level_actors — list actors in the current level
+- get_output_log — read editor output log
+- capture_viewport — screenshot the viewport
+- open_level — switch levels
 
-KEY UE5.7 FEATURES TO BE AWARE OF:
-- Enhanced Nanite and Lumen for next-gen rendering
-- World Partition for open world streaming
-- Mass Entity (experimental) for large-scale simulations
-- Enhanced Input System (preferred over legacy input)
-- Common UI for cross-platform interfaces
-- Gameplay Ability System (GAS) for complex ability systems
-- MetaSounds for procedural audio
-- Chaos physics engine (default)
-- Control Rig for animation
-- Niagara for VFX
+HOW TO READ A GRAPH:
+1. blueprint_query(operation="inspect", blueprint_path="...", include_functions=true)
+2. blueprint_read_graph(blueprint_path="...")                        ← lists all graphs
+3. blueprint_read_graph(blueprint_path="...", graph_name="MyGraph") ← reads nodes
+Use start_node + max_nodes to page large graphs (EventGraph can have 200+ nodes).
 
-CODING STANDARDS:
-- Use UPROPERTY, UFUNCTION, UCLASS macros properly
-- Follow Unreal naming conventions (F for structs, U for UObject, A for Actor, E for enums)
-- Prefer BlueprintCallable/BlueprintPure for BP-exposed functions
-- Use TObjectPtr<> for object pointers in headers (UE5+)
-- Use Forward declarations in headers, includes in cpp
-- Properly use GENERATED_BODY() macro
-
-WHEN PROVIDING CODE:
-- Always specify the correct includes
-- Use proper UE5.7 API calls (not deprecated ones)
-- Include both .h and .cpp when showing class implementations
-- Explain any engine-specific gotchas or limitations
-
-TOOL USAGE GUIDELINES:
-- You have dedicated MCP tools for common Unreal Editor operations. ALWAYS prefer these over execute_script:
-  * spawn_actor, move_actor, delete_actors, get_level_actors, set_property - Actor manipulation
-  * open_level (open/new/list_templates) - Level management: open maps, create new levels, list templates
-  * blueprint_query, blueprint_modify - Blueprint inspection and editing
-  * anim_blueprint_modify - Animation blueprint state machines
-  * asset_search, asset_dependencies, asset_referencers - Asset discovery and dependency tracking
-  * capture_viewport - Screenshot the editor viewport
-  * run_console_command - Run editor console commands
-  * enhanced_input - Input action and mapping context management
-  * character, character_data - Character and movement configuration
-  * material - Material and material instance operations
-  * task_submit, task_status, task_result, task_list, task_cancel - Async task management
-- Only use execute_script when NO dedicated tool can accomplish the task
-- Use open_level to switch levels instead of console commands (the 'open' command is blocked for security)
-- Use get_ue_context to look up UE5.7 API patterns before writing scripts
-
-RESPONSE FORMAT:
-- Be concise but thorough
-- Provide code examples when helpful
-- Mention relevant documentation or resources
-- Warn about common pitfalls)");
+RULES:
+- Read ARCHITECTURE.md before proposing any solution
+- This is a read-only session — you cannot modify project files (only Docs/ and ARCHITECTURE.md)
+- Be concise; avoid restating what you just read)");
 
 FClaudeCodeSubsystem& FClaudeCodeSubsystem::Get()
 {
@@ -99,7 +65,12 @@ void FClaudeCodeSubsystem::SendPrompt(
 	Config.Prompt = BuildPromptWithHistory(Prompt);
 	Config.WorkingDirectory = FPaths::ProjectDir();
 	Config.bSkipPermissions = true;
-	Config.AllowedTools = { TEXT("Read"), TEXT("Grep"), TEXT("Glob") };
+	Config.AllowedTools = {
+		TEXT("Read"), TEXT("Grep"), TEXT("Glob"),
+		// Allow edits only to docs and architecture files — all other writes remain blocked
+		TEXT("Edit(Docs/**)"), TEXT("Edit(ARCHITECTURE.md)"), TEXT("Edit(CLAUDE.md)"),
+		TEXT("Write(Docs/**)"), TEXT("Write(ARCHITECTURE.md)"),
+	};
 	Config.Model = SelectedModel;
 
 	Config.AttachedImagePaths = Options.AttachedImagePaths;

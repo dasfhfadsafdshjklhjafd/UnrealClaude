@@ -33,10 +33,10 @@ FAnthropicAPIBackend::~FAnthropicAPIBackend()
 
 ELLMBackendCapability FAnthropicAPIBackend::GetCapabilities() const
 {
-	return ELLMBackendCapability::ImageInput
+	return ELLMBackendCapability::ToolCalling
+		| ELLMBackendCapability::ImageInput
 		| ELLMBackendCapability::Streaming
 		| ELLMBackendCapability::CostReporting;
-	// No NativeSession, no ToolCalling, no MCP
 }
 
 bool FAnthropicAPIBackend::IsAvailable() const
@@ -131,10 +131,41 @@ bool FAnthropicAPIBackend::SubmitTurn(
 	// Add user message to session history
 	State.AddUserMessage(UserMessage, ImagePaths);
 
-	// Build the request body
-	FString RequestBody = BuildRequestBody(State, ModelId);
+	// Accumulate response data across tool-call iterations
+	TSharedPtr<FLLMTokenUsage> AccumulatedUsage = MakeShared<FLLMTokenUsage>();
+	AccumulatedUsage->ModelId = ModelId;
+	AccumulatedUsage->ProviderId = TEXT("anthropic-api");
 
-	// Create HTTP request
+	TSharedPtr<FString> AccumulatedText = MakeShared<FString>();
+
+	// Start the request (may loop for tool calls)
+	SendRequest(Session.SessionId, ModelId, OnComplete, OnProgress, AccumulatedUsage, AccumulatedText, 0);
+
+	return true;
+}
+
+void FAnthropicAPIBackend::SendRequest(
+	const FGuid& SessionId,
+	const FString& ModelId,
+	FOnLLMTurnComplete OnComplete,
+	FOnLLMStreamProgress OnProgress,
+	TSharedPtr<FLLMTokenUsage> AccumulatedUsage,
+	TSharedPtr<FString> AccumulatedText,
+	int32 ToolLoopCount)
+{
+	TSharedPtr<FLLMSessionState>* Found = Sessions.Find(SessionId);
+	if (!Found || !Found->IsValid())
+	{
+		if (OnComplete.IsBound())
+		{
+			OnComplete.Execute(FLLMTurnResult::Error(TEXT("Session lost during tool loop")));
+		}
+		return;
+	}
+
+	FString APIKey = GetAPIKey();
+	FString RequestBody = BuildRequestBody(**Found, ModelId);
+
 	TSharedRef<IHttpRequest> Request = FHttpModule::Get().CreateRequest();
 	Request->SetURL(APIEndpoint);
 	Request->SetVerb(TEXT("POST"));
@@ -143,17 +174,8 @@ bool FAnthropicAPIBackend::SubmitTurn(
 	Request->SetHeader(TEXT("anthropic-version"), APIVersion);
 	Request->SetContentAsString(RequestBody);
 
-	// Accumulate response data
-	TSharedPtr<FLLMTokenUsage> AccumulatedUsage = MakeShared<FLLMTokenUsage>();
-	AccumulatedUsage->ModelId = ModelId;
-	AccumulatedUsage->ProviderId = TEXT("anthropic-api");
-
-	TSharedPtr<FString> AccumulatedText = MakeShared<FString>();
-	FGuid SessionId = Session.SessionId;
-
-	// Handle completion
 	Request->OnProcessRequestComplete().BindLambda(
-		[this, OnComplete, AccumulatedUsage, AccumulatedText, ModelId, SessionId]
+		[this, OnComplete, OnProgress, AccumulatedUsage, AccumulatedText, ModelId, SessionId, ToolLoopCount]
 		(FHttpRequestPtr Req, FHttpResponsePtr Resp, bool bConnectedSuccessfully)
 	{
 		CurrentRequest.Reset();
@@ -172,7 +194,6 @@ bool FAnthropicAPIBackend::SubmitTurn(
 
 		if (ResponseCode != 200)
 		{
-			// Parse error message from response
 			FString ErrorMsg = FString::Printf(TEXT("Anthropic API error (HTTP %d)"), ResponseCode);
 
 			TSharedPtr<FJsonObject> ErrorJson;
@@ -197,29 +218,174 @@ bool FAnthropicAPIBackend::SubmitTurn(
 			return;
 		}
 
-		// Parse the response
-		FLLMTurnResult Result = ParseResponse(ResponseBody, ModelId);
-
-		// Record assistant response in session
-		TSharedPtr<FLLMSessionState>* SessionPtr = Sessions.Find(SessionId);
-		if (SessionPtr && SessionPtr->IsValid() && Result.bSuccess)
-		{
-			(*SessionPtr)->AddAssistantMessage(Result.ResponseText);
-		}
-
-		if (OnComplete.IsBound())
-		{
-			OnComplete.Execute(Result);
-		}
+		HandleResponse(ResponseBody, ModelId, SessionId, OnComplete, OnProgress,
+			AccumulatedUsage, AccumulatedText, ToolLoopCount);
 	});
 
 	CurrentRequest = Request;
 	Request->ProcessRequest();
 
-	UE_LOG(LogUnrealClaude, Log, TEXT("FAnthropicAPIBackend: Submitted turn (model: %s, session messages: %d)"),
-		*ModelId, (*Found)->GetMessageCount());
+	UE_LOG(LogUnrealClaude, Log, TEXT("FAnthropicAPIBackend: Sending request (model: %s, loop: %d)"),
+		*ModelId, ToolLoopCount);
+}
 
-	return true;
+void FAnthropicAPIBackend::HandleResponse(
+	const FString& ResponseBody,
+	const FString& ModelId,
+	const FGuid& SessionId,
+	FOnLLMTurnComplete OnComplete,
+	FOnLLMStreamProgress OnProgress,
+	TSharedPtr<FLLMTokenUsage> AccumulatedUsage,
+	TSharedPtr<FString> AccumulatedText,
+	int32 ToolLoopCount)
+{
+	TSharedPtr<FJsonObject> Root;
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseBody);
+	if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
+	{
+		if (OnComplete.IsBound())
+		{
+			OnComplete.Execute(FLLMTurnResult::Error(TEXT("Failed to parse Anthropic API response")));
+		}
+		return;
+	}
+
+	// Accumulate token usage
+	const TSharedPtr<FJsonObject>* UsageObj = nullptr;
+	if (Root->TryGetObjectField(TEXT("usage"), UsageObj) && UsageObj)
+	{
+		int32 InTokens = 0, OutTokens = 0, CachedTokens = 0;
+		(*UsageObj)->TryGetNumberField(TEXT("input_tokens"), InTokens);
+		(*UsageObj)->TryGetNumberField(TEXT("output_tokens"), OutTokens);
+		(*UsageObj)->TryGetNumberField(TEXT("cache_read_input_tokens"), CachedTokens);
+		AccumulatedUsage->InputTokens += InTokens;
+		AccumulatedUsage->OutputTokens += OutTokens;
+		AccumulatedUsage->CachedInputTokens += CachedTokens;
+	}
+
+	// Extract text content from this response
+	FString ResponseText;
+	const TArray<TSharedPtr<FJsonValue>>* ContentArray = nullptr;
+	if (Root->TryGetArrayField(TEXT("content"), ContentArray))
+	{
+		for (const TSharedPtr<FJsonValue>& ContentValue : *ContentArray)
+		{
+			const TSharedPtr<FJsonObject>* ContentObj = nullptr;
+			if (ContentValue->TryGetObject(ContentObj) && ContentObj)
+			{
+				FString Type;
+				if ((*ContentObj)->TryGetStringField(TEXT("type"), Type) && Type == TEXT("text"))
+				{
+					FString Text;
+					if ((*ContentObj)->TryGetStringField(TEXT("text"), Text))
+					{
+						if (!AccumulatedText->IsEmpty())
+						{
+							*AccumulatedText += TEXT("\n");
+						}
+						*AccumulatedText += Text;
+
+						// Emit stream event for UI
+						if (OnProgress.IsBound())
+						{
+							FClaudeStreamEvent Event;
+							Event.Type = EClaudeStreamEventType::TextContent;
+							Event.Text = Text;
+							OnProgress.Execute(Event);
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Check if the model wants to call tools
+	if (FLLMToolCaller::AnthropicResponseHasToolUse(Root))
+	{
+		if (ToolLoopCount >= MaxToolLoopIterations)
+		{
+			UE_LOG(LogUnrealClaude, Warning, TEXT("FAnthropicAPIBackend: Tool loop limit reached (%d)"), MaxToolLoopIterations);
+			// Fall through to return what we have
+		}
+		else
+		{
+			TArray<FLLMToolCaller::FToolCall> ToolCalls = FLLMToolCaller::ExtractAnthropicToolCalls(Root);
+
+			if (ToolCalls.Num() > 0)
+			{
+				// Emit tool use events for UI
+				for (const FLLMToolCaller::FToolCall& Call : ToolCalls)
+				{
+					if (OnProgress.IsBound())
+					{
+						FClaudeStreamEvent Event;
+						Event.Type = EClaudeStreamEventType::ToolUse;
+						Event.ToolName = Call.Name;
+						Event.ToolInput = Call.InputJson;
+						Event.ToolCallId = Call.Id;
+						OnProgress.Execute(Event);
+					}
+				}
+
+				// Execute all tool calls
+				TArray<TPair<bool, FString>> Results;
+				for (const FLLMToolCaller::FToolCall& Call : ToolCalls)
+				{
+					UE_LOG(LogUnrealClaude, Log, TEXT("FAnthropicAPIBackend: Executing tool '%s' (id: %s)"),
+						*Call.Name, *Call.Id);
+
+					TPair<bool, FString> Result = FLLMToolCaller::ExecuteToolCall(Call.Name, Call.InputJson);
+					Results.Add(Result);
+
+					// Emit tool result event for UI
+					if (OnProgress.IsBound())
+					{
+						FClaudeStreamEvent Event;
+						Event.Type = EClaudeStreamEventType::ToolResult;
+						Event.ToolCallId = Call.Id;
+						Event.ToolName = Call.Name;
+						Event.ToolResultContent = Result.Value;
+						Event.bIsError = !Result.Key;
+						OnProgress.Execute(Event);
+					}
+				}
+
+				// Add tool exchange to session for the next request
+				TSharedPtr<FLLMSessionState>* SessionPtr = Sessions.Find(SessionId);
+				if (SessionPtr && SessionPtr->IsValid())
+				{
+					// Echo assistant response with tool_use blocks
+					(*SessionPtr)->AddRawJsonMessage(
+						FLLMToolCaller::BuildAnthropicAssistantToolMessage(*ContentArray));
+
+					// Add tool results as user message
+					(*SessionPtr)->AddRawJsonMessage(
+						FLLMToolCaller::BuildAnthropicToolResultMessage(ToolCalls, Results));
+				}
+
+				// Continue the loop — send another request
+				SendRequest(SessionId, ModelId, OnComplete, OnProgress,
+					AccumulatedUsage, AccumulatedText, ToolLoopCount + 1);
+				return;
+			}
+		}
+	}
+
+	// No more tool calls — finalize the turn
+	TSharedPtr<FLLMSessionState>* SessionPtr = Sessions.Find(SessionId);
+	if (SessionPtr && SessionPtr->IsValid())
+	{
+		(*SessionPtr)->AddAssistantMessage(*AccumulatedText);
+		// Clear any leftover raw messages
+		(*SessionPtr)->ClearRawJsonMessages();
+	}
+
+	FLLMTurnResult Result = FLLMTurnResult::Success(*AccumulatedText, *AccumulatedUsage);
+
+	if (OnComplete.IsBound())
+	{
+		OnComplete.Execute(Result);
+	}
 }
 
 void FAnthropicAPIBackend::Cancel()
@@ -288,7 +454,7 @@ float FAnthropicAPIBackend::EstimateCost(const FString& PromptText, const FStrin
 // Request Building
 // ============================================================================
 
-FString FAnthropicAPIBackend::BuildRequestBody(const FLLMSessionState& Session, const FString& ModelId, int32 MaxTokens) const
+FString FAnthropicAPIBackend::BuildRequestBody(FLLMSessionState& Session, const FString& ModelId, int32 MaxTokens) const
 {
 	TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
 
@@ -300,6 +466,13 @@ FString FAnthropicAPIBackend::BuildRequestBody(const FLLMSessionState& Session, 
 	if (!FullSystemPrompt.IsEmpty())
 	{
 		Root->SetStringField(TEXT("system"), FullSystemPrompt);
+	}
+
+	// Tools — include all MCP tools for Anthropic
+	TArray<TSharedPtr<FJsonValue>> ToolDefs = FLLMToolCaller::GetToolsForAnthropic(EToolFilter::All);
+	if (ToolDefs.Num() > 0)
+	{
+		Root->SetArrayField(TEXT("tools"), ToolDefs);
 	}
 
 	// Messages array
@@ -315,7 +488,6 @@ FString FAnthropicAPIBackend::BuildRequestBody(const FLLMSessionState& Session, 
 			// Multi-part content with images
 			TArray<TSharedPtr<FJsonValue>> ContentArray;
 
-			// Add images first
 			for (const FString& ImagePath : Msg.ImagePaths)
 			{
 				TArray<uint8> ImageData;
@@ -336,7 +508,6 @@ FString FAnthropicAPIBackend::BuildRequestBody(const FLLMSessionState& Session, 
 				}
 			}
 
-			// Add text content
 			TSharedPtr<FJsonObject> TextBlock = MakeShared<FJsonObject>();
 			TextBlock->SetStringField(TEXT("type"), TEXT("text"));
 			TextBlock->SetStringField(TEXT("text"), Msg.Content);
@@ -346,11 +517,16 @@ FString FAnthropicAPIBackend::BuildRequestBody(const FLLMSessionState& Session, 
 		}
 		else
 		{
-			// Simple text content
 			MsgObj->SetStringField(TEXT("content"), Msg.Content);
 		}
 
 		MessagesArray.Add(MakeShared<FJsonValueObject>(MsgObj));
+	}
+
+	// Append any raw JSON messages (tool_use echoes + tool_result messages from the loop)
+	for (const TSharedPtr<FJsonObject>& RawMsg : Session.GetRawJsonMessages())
+	{
+		MessagesArray.Add(MakeShared<FJsonValueObject>(RawMsg));
 	}
 
 	Root->SetArrayField(TEXT("messages"), MessagesArray);
@@ -368,6 +544,7 @@ FString FAnthropicAPIBackend::BuildRequestBody(const FLLMSessionState& Session, 
 
 FLLMTurnResult FAnthropicAPIBackend::ParseResponse(const FString& ResponseBody, const FString& ModelId) const
 {
+	// Legacy path — kept for compatibility but HandleResponse is the primary path now
 	TSharedPtr<FJsonObject> Root;
 	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseBody);
 
@@ -376,7 +553,6 @@ FLLMTurnResult FAnthropicAPIBackend::ParseResponse(const FString& ResponseBody, 
 		return FLLMTurnResult::Error(TEXT("Failed to parse Anthropic API response"));
 	}
 
-	// Extract text from content blocks
 	FString ResponseText;
 	const TArray<TSharedPtr<FJsonValue>>* ContentArray = nullptr;
 	if (Root->TryGetArrayField(TEXT("content"), ContentArray))
@@ -392,10 +568,7 @@ FLLMTurnResult FAnthropicAPIBackend::ParseResponse(const FString& ResponseBody, 
 					FString Text;
 					if ((*ContentObj)->TryGetStringField(TEXT("text"), Text))
 					{
-						if (!ResponseText.IsEmpty())
-						{
-							ResponseText += TEXT("\n");
-						}
+						if (!ResponseText.IsEmpty()) ResponseText += TEXT("\n");
 						ResponseText += Text;
 					}
 				}
@@ -403,7 +576,6 @@ FLLMTurnResult FAnthropicAPIBackend::ParseResponse(const FString& ResponseBody, 
 		}
 	}
 
-	// Extract token usage
 	FLLMTokenUsage Usage;
 	Usage.ModelId = ModelId;
 	Usage.ProviderId = TEXT("anthropic-api");

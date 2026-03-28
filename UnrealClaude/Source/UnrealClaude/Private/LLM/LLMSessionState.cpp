@@ -73,4 +73,18 @@ void FLLMSessionState::TrimToTokenBudget(int32 MaxTokens, int32 MinExchangesToKe
 void FLLMSessionState::ClearMessages()
 {
 	Messages.Empty();
+	RawJsonMessages.Empty();
+}
+
+void FLLMSessionState::AddRawJsonMessage(TSharedPtr<FJsonObject> RawMsg)
+{
+	if (RawMsg.IsValid())
+	{
+		RawJsonMessages.Add(MoveTemp(RawMsg));
+	}
+}
+
+void FLLMSessionState::ClearRawJsonMessages()
+{
+	RawJsonMessages.Empty();
 }

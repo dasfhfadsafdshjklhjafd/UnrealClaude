@@ -68,8 +68,26 @@ public:
 	/** Clear all messages (keeps system prompt) */
 	void ClearMessages();
 
+	/**
+	 * Add a raw JSON message object (for tool_use / tool_result exchanges).
+	 * These are serialized directly into the messages array during request building.
+	 */
+	void AddRawJsonMessage(TSharedPtr<FJsonObject> RawMsg);
+
+	/** Get raw JSON messages. Empty if none added. */
+	const TArray<TSharedPtr<FJsonObject>>& GetRawJsonMessages() const { return RawJsonMessages; }
+
+	/** Clear raw JSON messages (called after they've been consumed by the request builder) */
+	void ClearRawJsonMessages();
+
+	/** Whether there are pending raw JSON messages to include */
+	bool HasRawJsonMessages() const { return RawJsonMessages.Num() > 0; }
+
 private:
 	FString SystemPrompt;
 	TArray<FString> ContextBlocks;
 	TArray<FLLMMessage> Messages;
+
+	/** Raw JSON message objects for tool calling exchanges */
+	TArray<TSharedPtr<FJsonObject>> RawJsonMessages;
 };

@@ -31,8 +31,9 @@ FOpenAIAPIBackend::~FOpenAIAPIBackend()
 
 ELLMBackendCapability FOpenAIAPIBackend::GetCapabilities() const
 {
-	// READ-ONLY: No ToolCalling, no MCP. ImageInput for vision models.
-	return ELLMBackendCapability::ImageInput
+	// READ-ONLY tool calling: only read-only MCP tools are exposed
+	return ELLMBackendCapability::ToolCalling
+		| ELLMBackendCapability::ImageInput
 		| ELLMBackendCapability::Streaming
 		| ELLMBackendCapability::CostReporting;
 }
@@ -125,14 +126,40 @@ bool FOpenAIAPIBackend::SubmitTurn(
 	}
 
 	FLLMSessionState& State = **Found;
-
-	// Add user message to session history
 	State.AddUserMessage(UserMessage, ImagePaths);
 
-	// Build the request body
-	FString RequestBody = BuildRequestBody(State, ModelId);
+	TSharedPtr<FLLMTokenUsage> AccumulatedUsage = MakeShared<FLLMTokenUsage>();
+	AccumulatedUsage->ModelId = ModelId;
+	AccumulatedUsage->ProviderId = TEXT("openai-api");
 
-	// Create HTTP request
+	TSharedPtr<FString> AccumulatedText = MakeShared<FString>();
+
+	SendRequest(Session.SessionId, ModelId, OnComplete, OnProgress, AccumulatedUsage, AccumulatedText, 0);
+	return true;
+}
+
+void FOpenAIAPIBackend::SendRequest(
+	const FGuid& SessionId,
+	const FString& ModelId,
+	FOnLLMTurnComplete OnComplete,
+	FOnLLMStreamProgress OnProgress,
+	TSharedPtr<FLLMTokenUsage> AccumulatedUsage,
+	TSharedPtr<FString> AccumulatedText,
+	int32 ToolLoopCount)
+{
+	TSharedPtr<FLLMSessionState>* Found = Sessions.Find(SessionId);
+	if (!Found || !Found->IsValid())
+	{
+		if (OnComplete.IsBound())
+		{
+			OnComplete.Execute(FLLMTurnResult::Error(TEXT("Session lost during tool loop")));
+		}
+		return;
+	}
+
+	FString APIKey = GetAPIKey();
+	FString RequestBody = BuildRequestBody(**Found, ModelId);
+
 	TSharedRef<IHttpRequest> Request = FHttpModule::Get().CreateRequest();
 	Request->SetURL(APIEndpoint);
 	Request->SetVerb(TEXT("POST"));
@@ -140,11 +167,8 @@ bool FOpenAIAPIBackend::SubmitTurn(
 	Request->SetHeader(TEXT("Authorization"), FString::Printf(TEXT("Bearer %s"), *APIKey));
 	Request->SetContentAsString(RequestBody);
 
-	FGuid SessionId = Session.SessionId;
-
-	// Handle completion
 	Request->OnProcessRequestComplete().BindLambda(
-		[this, OnComplete, ModelId, SessionId]
+		[this, OnComplete, OnProgress, AccumulatedUsage, AccumulatedText, ModelId, SessionId, ToolLoopCount]
 		(FHttpRequestPtr Req, FHttpResponsePtr Resp, bool bConnectedSuccessfully)
 	{
 		CurrentRequest.Reset();
@@ -187,29 +211,182 @@ bool FOpenAIAPIBackend::SubmitTurn(
 			return;
 		}
 
-		// Parse the response
-		FLLMTurnResult Result = ParseResponse(ResponseBody, ModelId);
-
-		// Record assistant response in session
-		TSharedPtr<FLLMSessionState>* SessionPtr = Sessions.Find(SessionId);
-		if (SessionPtr && SessionPtr->IsValid() && Result.bSuccess)
-		{
-			(*SessionPtr)->AddAssistantMessage(Result.ResponseText);
-		}
-
-		if (OnComplete.IsBound())
-		{
-			OnComplete.Execute(Result);
-		}
+		HandleResponse(ResponseBody, ModelId, SessionId, OnComplete, OnProgress,
+			AccumulatedUsage, AccumulatedText, ToolLoopCount);
 	});
 
 	CurrentRequest = Request;
 	Request->ProcessRequest();
 
-	UE_LOG(LogUnrealClaude, Log, TEXT("FOpenAIAPIBackend: Submitted turn (model: %s, session messages: %d)"),
-		*ModelId, (*Found)->GetMessageCount());
+	UE_LOG(LogUnrealClaude, Log, TEXT("FOpenAIAPIBackend: Sending request (model: %s, loop: %d)"),
+		*ModelId, ToolLoopCount);
+}
 
-	return true;
+void FOpenAIAPIBackend::HandleResponse(
+	const FString& ResponseBody,
+	const FString& ModelId,
+	const FGuid& SessionId,
+	FOnLLMTurnComplete OnComplete,
+	FOnLLMStreamProgress OnProgress,
+	TSharedPtr<FLLMTokenUsage> AccumulatedUsage,
+	TSharedPtr<FString> AccumulatedText,
+	int32 ToolLoopCount)
+{
+	TSharedPtr<FJsonObject> Root;
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseBody);
+	if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
+	{
+		if (OnComplete.IsBound())
+		{
+			OnComplete.Execute(FLLMTurnResult::Error(TEXT("Failed to parse OpenAI API response")));
+		}
+		return;
+	}
+
+	// Accumulate token usage
+	const TSharedPtr<FJsonObject>* UsageObj = nullptr;
+	if (Root->TryGetObjectField(TEXT("usage"), UsageObj) && UsageObj)
+	{
+		int32 InTokens = 0, OutTokens = 0, CachedTokens = 0;
+		(*UsageObj)->TryGetNumberField(TEXT("prompt_tokens"), InTokens);
+		(*UsageObj)->TryGetNumberField(TEXT("completion_tokens"), OutTokens);
+		const TSharedPtr<FJsonObject>* PromptDetails = nullptr;
+		if ((*UsageObj)->TryGetObjectField(TEXT("prompt_tokens_details"), PromptDetails) && PromptDetails)
+		{
+			(*PromptDetails)->TryGetNumberField(TEXT("cached_tokens"), CachedTokens);
+		}
+		AccumulatedUsage->InputTokens += InTokens;
+		AccumulatedUsage->OutputTokens += OutTokens;
+		AccumulatedUsage->CachedInputTokens += CachedTokens;
+	}
+
+	// Extract text content
+	FString ResponseText;
+	const TArray<TSharedPtr<FJsonValue>>* ChoicesArray = nullptr;
+	if (Root->TryGetArrayField(TEXT("choices"), ChoicesArray) && ChoicesArray->Num() > 0)
+	{
+		const TSharedPtr<FJsonObject>* ChoiceObj = nullptr;
+		if ((*ChoicesArray)[0]->TryGetObject(ChoiceObj) && ChoiceObj)
+		{
+			const TSharedPtr<FJsonObject>* MessageObj = nullptr;
+			if ((*ChoiceObj)->TryGetObjectField(TEXT("message"), MessageObj) && MessageObj)
+			{
+				(*MessageObj)->TryGetStringField(TEXT("content"), ResponseText);
+			}
+
+			// Check finish_reason for tool_calls
+			FString FinishReason;
+			(*ChoiceObj)->TryGetStringField(TEXT("finish_reason"), FinishReason);
+
+			if (FinishReason == TEXT("tool_calls") && ToolLoopCount < MaxToolLoopIterations)
+			{
+				TArray<FLLMToolCaller::FToolCall> ToolCalls = FLLMToolCaller::ExtractOpenAIToolCalls(Root);
+
+				if (ToolCalls.Num() > 0)
+				{
+					// Emit text if any
+					if (!ResponseText.IsEmpty())
+					{
+						if (!AccumulatedText->IsEmpty()) *AccumulatedText += TEXT("\n");
+						*AccumulatedText += ResponseText;
+
+						if (OnProgress.IsBound())
+						{
+							FClaudeStreamEvent Event;
+							Event.Type = EClaudeStreamEventType::TextContent;
+							Event.Text = ResponseText;
+							OnProgress.Execute(Event);
+						}
+					}
+
+					// Emit tool use events
+					for (const FLLMToolCaller::FToolCall& Call : ToolCalls)
+					{
+						if (OnProgress.IsBound())
+						{
+							FClaudeStreamEvent Event;
+							Event.Type = EClaudeStreamEventType::ToolUse;
+							Event.ToolName = Call.Name;
+							Event.ToolInput = Call.InputJson;
+							Event.ToolCallId = Call.Id;
+							OnProgress.Execute(Event);
+						}
+					}
+
+					// Execute tools (READ-ONLY only — enforced by GetToolsForOpenAI filter)
+					TArray<TPair<bool, FString>> Results;
+					for (const FLLMToolCaller::FToolCall& Call : ToolCalls)
+					{
+						UE_LOG(LogUnrealClaude, Log, TEXT("FOpenAIAPIBackend: Executing read-only tool '%s'"), *Call.Name);
+						TPair<bool, FString> Result = FLLMToolCaller::ExecuteToolCall(Call.Name, Call.InputJson);
+						Results.Add(Result);
+
+						if (OnProgress.IsBound())
+						{
+							FClaudeStreamEvent Event;
+							Event.Type = EClaudeStreamEventType::ToolResult;
+							Event.ToolCallId = Call.Id;
+							Event.ToolName = Call.Name;
+							Event.ToolResultContent = Result.Value;
+							Event.bIsError = !Result.Key;
+							OnProgress.Execute(Event);
+						}
+					}
+
+					// Add tool exchange to session
+					TSharedPtr<FLLMSessionState>* SessionPtr = Sessions.Find(SessionId);
+					if (SessionPtr && SessionPtr->IsValid())
+					{
+						// Echo assistant message with tool_calls
+						(*SessionPtr)->AddRawJsonMessage(
+							FLLMToolCaller::BuildOpenAIAssistantToolMessage(ResponseText, Root));
+
+						// Add individual tool result messages
+						TArray<TSharedPtr<FJsonObject>> ResultMsgs =
+							FLLMToolCaller::BuildOpenAIToolResultMessages(ToolCalls, Results);
+						for (const TSharedPtr<FJsonObject>& Msg : ResultMsgs)
+						{
+							(*SessionPtr)->AddRawJsonMessage(Msg);
+						}
+					}
+
+					// Continue loop
+					SendRequest(SessionId, ModelId, OnComplete, OnProgress,
+						AccumulatedUsage, AccumulatedText, ToolLoopCount + 1);
+					return;
+				}
+			}
+		}
+	}
+
+	// No more tool calls — finalize
+	if (!ResponseText.IsEmpty())
+	{
+		if (!AccumulatedText->IsEmpty()) *AccumulatedText += TEXT("\n");
+		*AccumulatedText += ResponseText;
+
+		if (OnProgress.IsBound())
+		{
+			FClaudeStreamEvent Event;
+			Event.Type = EClaudeStreamEventType::TextContent;
+			Event.Text = ResponseText;
+			OnProgress.Execute(Event);
+		}
+	}
+
+	TSharedPtr<FLLMSessionState>* SessionPtr = Sessions.Find(SessionId);
+	if (SessionPtr && SessionPtr->IsValid())
+	{
+		(*SessionPtr)->AddAssistantMessage(*AccumulatedText);
+		(*SessionPtr)->ClearRawJsonMessages();
+	}
+
+	FLLMTurnResult Result = FLLMTurnResult::Success(*AccumulatedText, *AccumulatedUsage);
+
+	if (OnComplete.IsBound())
+	{
+		OnComplete.Execute(Result);
+	}
 }
 
 void FOpenAIAPIBackend::Cancel()
@@ -294,14 +471,21 @@ float FOpenAIAPIBackend::EstimateCost(const FString& PromptText, const FString& 
 // Request Building
 // ============================================================================
 
-FString FOpenAIAPIBackend::BuildRequestBody(const FLLMSessionState& Session, const FString& ModelId, int32 MaxTokens) const
+FString FOpenAIAPIBackend::BuildRequestBody(FLLMSessionState& Session, const FString& ModelId, int32 MaxTokens) const
 {
 	TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
 
 	Root->SetStringField(TEXT("model"), ModelId);
 	Root->SetNumberField(TEXT("max_tokens"), MaxTokens);
 
-	// Messages array — OpenAI uses system message as first message
+	// Tools — READ-ONLY only for OpenAI
+	TArray<TSharedPtr<FJsonValue>> ToolDefs = FLLMToolCaller::GetToolsForOpenAI(EToolFilter::ReadOnly);
+	if (ToolDefs.Num() > 0)
+	{
+		Root->SetArrayField(TEXT("tools"), ToolDefs);
+	}
+
+	// Messages array
 	TArray<TSharedPtr<FJsonValue>> MessagesArray;
 
 	// System message
@@ -322,10 +506,8 @@ FString FOpenAIAPIBackend::BuildRequestBody(const FLLMSessionState& Session, con
 
 		if (Msg.ImagePaths.Num() > 0)
 		{
-			// Multi-part content with images (OpenAI vision format)
 			TArray<TSharedPtr<FJsonValue>> ContentArray;
 
-			// Add images
 			for (const FString& ImagePath : Msg.ImagePaths)
 			{
 				TArray<uint8> ImageData;
@@ -345,7 +527,6 @@ FString FOpenAIAPIBackend::BuildRequestBody(const FLLMSessionState& Session, con
 				}
 			}
 
-			// Add text
 			TSharedPtr<FJsonObject> TextBlock = MakeShared<FJsonObject>();
 			TextBlock->SetStringField(TEXT("type"), TEXT("text"));
 			TextBlock->SetStringField(TEXT("text"), Msg.Content);
@@ -359,6 +540,12 @@ FString FOpenAIAPIBackend::BuildRequestBody(const FLLMSessionState& Session, con
 		}
 
 		MessagesArray.Add(MakeShared<FJsonValueObject>(MsgObj));
+	}
+
+	// Append raw JSON messages (tool call echoes + tool results from the loop)
+	for (const TSharedPtr<FJsonObject>& RawMsg : Session.GetRawJsonMessages())
+	{
+		MessagesArray.Add(MakeShared<FJsonValueObject>(RawMsg));
 	}
 
 	Root->SetArrayField(TEXT("messages"), MessagesArray);

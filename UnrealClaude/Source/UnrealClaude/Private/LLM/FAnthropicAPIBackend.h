@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "LLM/ILLMBackend.h"
 #include "LLMSessionState.h"
+#include "LLMToolCaller.h"
 #include "Interfaces/IHttpRequest.h"
 
 /**
@@ -57,10 +58,10 @@ public:
 	virtual float EstimateCost(const FString& PromptText, const FString& ModelId) const override;
 
 private:
-	/** Build the JSON request body for the Messages API */
-	FString BuildRequestBody(const FLLMSessionState& Session, const FString& ModelId, int32 MaxTokens = 8192) const;
+	/** Build the JSON request body for the Messages API (includes tools) */
+	FString BuildRequestBody(FLLMSessionState& Session, const FString& ModelId, int32 MaxTokens = 8192) const;
 
-	/** Parse a non-streaming response */
+	/** Parse a non-streaming response, handling tool_use stop_reason */
 	FLLMTurnResult ParseResponse(const FString& ResponseBody, const FString& ModelId) const;
 
 	/** Parse SSE stream chunks and emit events */
@@ -68,12 +69,39 @@ private:
 		FOnLLMStreamProgress OnProgress, TSharedPtr<FLLMTokenUsage> AccumulatedUsage,
 		TSharedPtr<FString> AccumulatedText) const;
 
+	/**
+	 * Handle a single HTTP response. If tools were called, executes them and
+	 * fires the next request. Otherwise completes the turn.
+	 */
+	void HandleResponse(
+		const FString& ResponseBody,
+		const FString& ModelId,
+		const FGuid& SessionId,
+		FOnLLMTurnComplete OnComplete,
+		FOnLLMStreamProgress OnProgress,
+		TSharedPtr<FLLMTokenUsage> AccumulatedUsage,
+		TSharedPtr<FString> AccumulatedText,
+		int32 ToolLoopCount);
+
+	/** Send a follow-up request (for tool-call loop continuation) */
+	void SendRequest(
+		const FGuid& SessionId,
+		const FString& ModelId,
+		FOnLLMTurnComplete OnComplete,
+		FOnLLMStreamProgress OnProgress,
+		TSharedPtr<FLLMTokenUsage> AccumulatedUsage,
+		TSharedPtr<FString> AccumulatedText,
+		int32 ToolLoopCount);
+
 	/** Get the API key */
 	FString GetAPIKey() const;
 
 	/** API endpoint */
 	static const FString APIEndpoint;
 	static const FString APIVersion;
+
+	/** Max tool-call loop iterations to prevent runaway */
+	static const int32 MaxToolLoopIterations = 20;
 
 	/** Active sessions */
 	TMap<FGuid, TSharedPtr<FLLMSessionState>> Sessions;

@@ -13,6 +13,8 @@
 #include "LLM/LLMRoleConfig.h"
 #include "Widgets/SClaudeToolbar.h"
 #include "Widgets/SClaudeInputArea.h"
+#include "Widgets/SRoleConfigPanel.h"
+#include "Framework/Application/SlateApplication.h"
 
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SBorder.h"
@@ -272,17 +274,23 @@ void SClaudeEditorWidget::OnAnthropicModeChanged(bool bUseCLI)
 
 void SClaudeEditorWidget::OpenRoleConfig()
 {
-	// TODO: Open a modal/flyout showing role assignments
-	// For now, log the current assignments
-	FLLMRoleManager& RoleManager = FClaudeCodeSubsystem::Get().GetRoleManager();
-	FString ConfigSummary = TEXT("Current role assignments:\n");
-	for (EModelRole Role : GetAllModelRoles())
-	{
-		FModelRoleAssignment A = RoleManager.GetAssignment(Role);
-		ConfigSummary += FString::Printf(TEXT("  %s: %s (%s)\n"),
-			*GetModelRoleDisplayName(Role), *A.ModelId, *A.ProviderId);
-	}
-	AddMessage(ConfigSummary, false);
+	TSharedRef<SRoleConfigPanel> Panel = SNew(SRoleConfigPanel);
+
+	TSharedRef<SWidget> PopupContent =
+		SNew(SBox)
+		.MinDesiredWidth(420.0f)
+		.Padding(FMargin(2.0f))
+		[
+			Panel
+		];
+
+	FSlateApplication::Get().PushMenu(
+		SharedThis(this),
+		FWidgetPath(),
+		PopupContent,
+		FSlateApplication::Get().GetCursorPos(),
+		FPopupTransitionEffect::ContextMenu
+	);
 }
 
 TSharedRef<SWidget> SClaudeEditorWidget::BuildChatArea()

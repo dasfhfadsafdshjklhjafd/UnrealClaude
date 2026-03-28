@@ -54,6 +54,14 @@ FMCPToolResult FMCPTool_AnimEdit::Execute(const TSharedRef<FJsonObject>& Params)
 
 	Operation = Operation.ToLower();
 
+	// Read-only mode: only inspect operations are allowed
+	static const TSet<FString> AllowedOps = { TEXT("inspect_track"), TEXT("inspect_mesh") };
+	if (!AllowedOps.Contains(Operation))
+	{
+		return FMCPToolResult::Error(FString::Printf(
+			TEXT("Operation '%s' is disabled (read-only mode). Allowed: inspect_track, inspect_mesh"), *Operation));
+	}
+
 	if (Operation == TEXT("adjust_track"))
 	{
 		return HandleAdjustTrack(Params);

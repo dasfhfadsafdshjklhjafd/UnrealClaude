@@ -80,7 +80,7 @@ public:
 			FMCPToolParameter(TEXT("curve_name"), TEXT("string"), TEXT("Curve name (for curve operations)")),
 			FMCPToolParameter(TEXT("keys"), TEXT("array"), TEXT("Array of key objects: [{time, value, interp_mode?, tangent_mode?, arrive_tangent?, leave_tangent?}]. interp_mode: Linear|Constant|Cubic. tangent_mode: Auto|User|Break|SmartAuto."))
 		};
-		Info.Annotations = FMCPToolAnnotations::Modifying();
+		Info.Annotations = FMCPToolAnnotations::ReadOnly();
 		return Info;
 	}
 

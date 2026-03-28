@@ -55,7 +55,7 @@ public:
 			FMCPToolParameter(TEXT("interpolation_type"), TEXT("string"), TEXT("Interpolation: Average, Linear, Cubic, EaseInOut, ExponentialDecay, SpringDamper (for set_axis)")),
 			FMCPToolParameter(TEXT("operations"), TEXT("array"), TEXT("Array of operation objects for batch. Each has 'op' field and operation-specific params."))
 		};
-		Info.Annotations = FMCPToolAnnotations::Modifying();
+		Info.Annotations = FMCPToolAnnotations::ReadOnly();
 		return Info;
 	}
 

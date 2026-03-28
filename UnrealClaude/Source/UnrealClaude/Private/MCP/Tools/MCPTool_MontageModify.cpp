@@ -29,6 +29,14 @@ FMCPToolResult FMCPTool_MontageModify::Execute(const TSharedRef<FJsonObject>& Pa
 		return Error.GetValue();
 	}
 
+	// Read-only mode: only get_info and get_curves are allowed
+	static const TSet<FString> AllowedOps = { TEXT("get_info"), TEXT("get_curves") };
+	if (!AllowedOps.Contains(Operation))
+	{
+		return FMCPToolResult::Error(FString::Printf(
+			TEXT("Operation '%s' is disabled (read-only mode). Allowed: get_info, get_curves"), *Operation));
+	}
+
 	if (Operation == TEXT("create"))
 	{
 		return HandleCreate(Params);

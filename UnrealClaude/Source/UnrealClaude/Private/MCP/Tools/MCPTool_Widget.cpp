@@ -9,7 +9,15 @@ FMCPToolResult FMCPTool_Widget::Execute(const TSharedRef<FJsonObject>& Params)
 	if (!Params->TryGetStringField(TEXT("operation"), Operation))
 		return FMCPToolResult::Error(TEXT("Missing required parameter: operation"));
 
-	// ── Read operations (no WBP load needed first) ──────────────────────────
+	// Read-only mode: only inspect_tree and get_properties are allowed
+	static const TSet<FString> AllowedOps = { TEXT("inspect_tree"), TEXT("get_properties") };
+	if (!AllowedOps.Contains(Operation))
+	{
+		return FMCPToolResult::Error(FString::Printf(
+			TEXT("Operation '%s' is disabled (read-only mode). Allowed: inspect_tree, get_properties"), *Operation));
+	}
+
+	// ── Read operations ─────────────────────────────────────────────────────
 
 	if (Operation == TEXT("inspect_tree"))
 	{

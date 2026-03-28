@@ -65,7 +65,7 @@ void FMCPToolRegistry::RegisterBuiltinTools()
 	RegisterTool(MakeShared<FMCPTool_AssetDependencies>());
 	RegisterTool(MakeShared<FMCPTool_AssetReferencers>());
 	RegisterTool(MakeShared<FMCPTool_OpenLevel>());
-	// Modifying tools
+	// Read-only inspect tools (modifying operations are disabled at the Execute level)
 	RegisterTool(MakeShared<FMCPTool_Widget>());
 	RegisterTool(MakeShared<FMCPTool_BlendSpace>());
 	RegisterTool(MakeShared<FMCPTool_MontageModify>());

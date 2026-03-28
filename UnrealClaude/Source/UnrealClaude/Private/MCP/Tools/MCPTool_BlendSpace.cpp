@@ -43,6 +43,14 @@ FMCPToolResult FMCPTool_BlendSpace::Execute(const TSharedRef<FJsonObject>& Param
 
 	Operation = Operation.ToLower();
 
+	// Read-only mode: only inspect and list are allowed
+	static const TSet<FString> AllowedOps = { TEXT("inspect"), TEXT("list") };
+	if (!AllowedOps.Contains(Operation))
+	{
+		return FMCPToolResult::Error(FString::Printf(
+			TEXT("Operation '%s' is disabled (read-only mode). Allowed: inspect, list"), *Operation));
+	}
+
 	// Read operations
 	if (Operation == TEXT("inspect"))
 	{

@@ -72,7 +72,7 @@ public:
 			FMCPToolParameter(TEXT("operations"), TEXT("array"),
 				TEXT("Array of operation objects for batch execution"), false)
 		};
-		Info.Annotations = FMCPToolAnnotations::Modifying();
+		Info.Annotations = FMCPToolAnnotations::ReadOnly();
 		return Info;
 	}
 

@@ -58,7 +58,7 @@ public:
 			FMCPToolParameter(TEXT("new_name"), TEXT("string"), TEXT("New asset name for extract_range")),
 			FMCPToolParameter(TEXT("save"), TEXT("boolean"), TEXT("Save modified assets to disk"), false, TEXT("true"))
 		};
-		Info.Annotations = FMCPToolAnnotations::Modifying();
+		Info.Annotations = FMCPToolAnnotations::ReadOnly();
 		return Info;
 	}
 

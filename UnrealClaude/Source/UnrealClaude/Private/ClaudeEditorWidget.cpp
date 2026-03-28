@@ -210,6 +210,7 @@ TSharedRef<SWidget> SClaudeEditorWidget::BuildToolbar()
 		.OnCopyChat_Lambda([this]() { CopyWholeChat(); })
 		.OnCompact_Lambda([this]() { CompactSession(); })
 		.OnRoleConfig_Lambda([this]() { OpenRoleConfig(); })
+		.OnSendRoleChanged_Lambda([this](EModelRole Role) { SelectedSendRole = Role; })
 		.SelectedModel_Lambda([this]() { return SelectedModel; })
 		.bAnthropicUseCLI_Lambda([this]() { return bAnthropicUseCLI; })
 		.TokenCountText_Lambda([this]() -> FText
@@ -473,10 +474,7 @@ void SClaudeEditorWidget::SendMessage()
 	// Start streaming response display
 	StartStreamingResponse();
 
-	// Send to Claude using FClaudePromptOptions
-	FOnClaudeResponse OnComplete;
-	OnComplete.BindSP(this, &SClaudeEditorWidget::OnClaudeResponse);
-
+	// Build options
 	FClaudePromptOptions Options;
 	Options.bIncludeEngineContext = bIncludeUE57Context;
 	Options.bIncludeProjectContext = bIncludeProjectContext;
@@ -484,7 +482,33 @@ void SClaudeEditorWidget::SendMessage()
 	Options.OnStreamEvent.BindSP(this, &SClaudeEditorWidget::OnClaudeStreamEvent);
 	Options.AttachedImagePaths = ImagePaths;
 
-	FClaudeCodeSubsystem::Get().SendPrompt(Prompt, OnComplete, Options);
+	if (SelectedSendRole != EModelRole::Worker)
+	{
+		// Route through the role's assigned model/backend
+		FOnLLMTurnComplete OnTurnComplete;
+		OnTurnComplete.BindLambda([this](const FLLMTurnResult& Result)
+		{
+			OnClaudeResponse(Result.ResponseText, Result.bSuccess);
+		});
+
+		// Temporarily switch to the role's backend
+		FLLMRoleManager& RoleManager = FClaudeCodeSubsystem::Get().GetRoleManager();
+		FModelRoleAssignment Assignment = RoleManager.GetAssignment(SelectedSendRole);
+		FString PreviousBackend = FClaudeCodeSubsystem::Get().GetActiveBackendId();
+
+		FClaudeCodeSubsystem::Get().SetActiveBackendId(Assignment.ProviderId);
+		FClaudeCodeSubsystem::Get().SendPromptViaBackend(Prompt, OnTurnComplete, Options, SelectedSendRole);
+
+		// Restore previous backend after send (the async callback handles completion)
+		FClaudeCodeSubsystem::Get().SetActiveBackendId(PreviousBackend);
+	}
+	else
+	{
+		// Default Worker path — use existing SendPrompt
+		FOnClaudeResponse OnComplete;
+		OnComplete.BindSP(this, &SClaudeEditorWidget::OnClaudeResponse);
+		FClaudeCodeSubsystem::Get().SendPrompt(Prompt, OnComplete, Options);
+	}
 }
 
 void SClaudeEditorWidget::OnClaudeResponse(const FString& Response, bool bSuccess)

@@ -6,10 +6,12 @@
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/DeclarativeSyntaxSupport.h"
 #include "Widgets/Input/SComboBox.h"
+#include "LLM/ILLMBackend.h"
 
 DECLARE_DELEGATE(FOnToolbarAction)
 DECLARE_DELEGATE_OneParam(FOnCheckboxChanged, bool)
 DECLARE_DELEGATE_OneParam(FOnModelChanged, const FString& /*ModelId*/)
+DECLARE_DELEGATE_OneParam(FOnRoleChanged, EModelRole /*Role*/)
 
 /**
  * Toolbar widget for Claude Editor
@@ -46,6 +48,7 @@ public:
 		SLATE_EVENT(FOnToolbarAction, OnRoleConfig)
 		SLATE_EVENT(FOnModelChanged, OnModelChanged)
 		SLATE_EVENT(FOnCheckboxChanged, OnAnthropicModeChanged)
+		SLATE_EVENT(FOnRoleChanged, OnSendRoleChanged)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
@@ -75,9 +78,15 @@ private:
 	FOnToolbarAction OnRoleConfig;
 	FOnModelChanged OnModelChanged;
 	FOnCheckboxChanged OnAnthropicModeChanged;
+	FOnRoleChanged OnSendRoleChanged;
 
 	TArray<TSharedPtr<FString>> ModelOptions;
 	TSharedPtr<SComboBox<TSharedPtr<FString>>> ModelComboBox;
+
+	/** Role selector for send routing */
+	TArray<TSharedPtr<EModelRole>> RoleOptions;
+	TSharedPtr<SComboBox<TSharedPtr<EModelRole>>> RoleComboBox;
+	EModelRole SelectedSendRole = EModelRole::Worker;
 
 	/** Get display name for a model, including provider hint */
 	static FString GetModelDisplayName(const FString& ModelId);

@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "IClaudeRunner.h"
+#include "LLM/ILLMBackend.h"
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/DeclarativeSyntaxSupport.h"
 
@@ -195,6 +196,9 @@ private:
 
 	/** Open role config UI */
 	void OpenRoleConfig();
+
+	/** Selected role for next send (defaults to Worker) */
+	EModelRole SelectedSendRole = EModelRole::Worker;
 
 	/** Accumulated input token count for the current session */
 	int32 SessionInputTokens = 0;

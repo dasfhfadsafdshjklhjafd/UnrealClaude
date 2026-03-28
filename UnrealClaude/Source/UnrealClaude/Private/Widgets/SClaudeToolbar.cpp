@@ -68,9 +68,16 @@ void SClaudeToolbar::Construct(const FArguments& InArgs)
 	OnRoleConfig = InArgs._OnRoleConfig;
 	OnModelChanged = InArgs._OnModelChanged;
 	OnAnthropicModeChanged = InArgs._OnAnthropicModeChanged;
+	OnSendRoleChanged = InArgs._OnSendRoleChanged;
 
 	// Initialize model options from all backends
 	RefreshModelOptions();
+
+	// Initialize role options
+	for (EModelRole Role : GetAllModelRoles())
+	{
+		RoleOptions.Add(MakeShared<EModelRole>(Role));
+	}
 
 	ChildSlot
 	[
@@ -267,6 +274,50 @@ void SClaudeToolbar::Construct(const FArguments& InArgs)
 					.Text(LOCTEXT("Compact", "Compact"))
 					.OnClicked_Lambda([this]() { OnCompact.ExecuteIfBound(); return FReply::Handled(); })
 					.ToolTipText(LOCTEXT("CompactTip", "Summarize conversation to free up context window"))
+				]
+
+				// Role selector (Send as...)
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				.Padding(4.0f, 0.0f)
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.VAlign(VAlign_Center)
+					.Padding(0.0f, 0.0f, 2.0f, 0.0f)
+					[
+						SNew(STextBlock)
+						.Text(LOCTEXT("SendAs", "Send as:"))
+						.TextStyle(FAppStyle::Get(), "SmallText")
+						.ColorAndOpacity(FSlateColor(FLinearColor(0.5f, 0.5f, 0.55f)))
+					]
+					+ SHorizontalBox::Slot()
+					.AutoWidth()
+					.VAlign(VAlign_Center)
+					[
+						SAssignNew(RoleComboBox, SComboBox<TSharedPtr<EModelRole>>)
+						.OptionsSource(&RoleOptions)
+						.OnSelectionChanged_Lambda([this](TSharedPtr<EModelRole> Item, ESelectInfo::Type)
+						{
+							if (Item.IsValid())
+							{
+								SelectedSendRole = *Item;
+								OnSendRoleChanged.ExecuteIfBound(SelectedSendRole);
+							}
+						})
+						.OnGenerateWidget_Lambda([](TSharedPtr<EModelRole> Item) -> TSharedRef<SWidget>
+						{
+							return SNew(STextBlock).Text(FText::FromString(
+								Item.IsValid() ? GetModelRoleDisplayName(*Item) : FString()));
+						})
+						.ToolTipText(LOCTEXT("SendRoleTip", "Choose which role processes your next message.\nWorker = default, Architect = design review, Escalation = fallback to stronger model"))
+						[
+							SNew(STextBlock)
+							.Text_Lambda([this]() { return FText::FromString(GetModelRoleDisplayName(SelectedSendRole)); })
+						]
+					]
 				]
 
 				+ SHorizontalBox::Slot()

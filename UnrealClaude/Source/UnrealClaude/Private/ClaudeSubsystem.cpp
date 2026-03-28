@@ -81,12 +81,16 @@ void FClaudeCodeSubsystem::SendPrompt(
 	Config.Prompt = BuildPromptWithHistory(Prompt);
 	Config.WorkingDirectory = FPaths::ProjectDir();
 	Config.bSkipPermissions = true;
-	Config.AllowedTools = {
-		TEXT("Read"), TEXT("Grep"), TEXT("Glob"),
-		// Allow edits only to docs and architecture files — all other writes remain blocked
-		TEXT("Edit(Docs/**)"), TEXT("Edit(ARCHITECTURE.md)"), TEXT("Edit(CLAUDE.md)"),
-		TEXT("Write(Docs/**)"), TEXT("Write(ARCHITECTURE.md)"),
-	};
+	Config.AllowedTools = { TEXT("Read"), TEXT("Grep"), TEXT("Glob") };
+
+	// Only DocsAgent role gets write access to documentation files
+	if (Options.Role == EModelRole::DocsAgent)
+	{
+		Config.AllowedTools.Append({
+			TEXT("Edit(Docs/**)"), TEXT("Edit(ARCHITECTURE.md)"), TEXT("Edit(CLAUDE.md)"),
+			TEXT("Write(Docs/**)"), TEXT("Write(ARCHITECTURE.md)"),
+		});
+	}
 	Config.Model = SelectedModel;
 
 	Config.AttachedImagePaths = Options.AttachedImagePaths;
@@ -402,7 +406,10 @@ void FClaudeCodeSubsystem::SendPromptViaBackend(
 			}
 		});
 
-		SendPrompt(Prompt, LegacyComplete, Options);
+		// Pass role through so SendPrompt can restrict write permissions
+		FClaudePromptOptions CLIOptions = Options;
+		CLIOptions.Role = Role;
+		SendPrompt(Prompt, LegacyComplete, CLIOptions);
 		return;
 	}
 

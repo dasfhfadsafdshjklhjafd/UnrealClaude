@@ -35,6 +35,9 @@ struct UNREALCLAUDE_API FClaudePromptOptions
 	/** Optional paths to attached clipboard images (PNG) */
 	TArray<FString> AttachedImagePaths;
 
+	/** Role for this request (controls write permissions — only DocsAgent can write) */
+	EModelRole Role = EModelRole::Worker;
+
 	/** Default constructor with sensible defaults */
 	FClaudePromptOptions() = default;
 

@@ -15,27 +15,26 @@
 #include "LLM/FAnthropicAPIBackend.h"
 #include "LLM/FOpenAIAPIBackend.h"
 #include "Misc/Paths.h"
+#include "Misc/FileHelper.h"
 #include "Interfaces/IPluginManager.h"
 
 // Cached system prompt - static to avoid recreation on each call
 static const FString CachedUE57SystemPrompt = TEXT(R"(You are an expert Unreal Engine 5.7 assistant working inside the UE Editor on a Blueprint-only multiplayer FPS project.
 
-TOOL USAGE:
+ALL TOOLS ARE READ-ONLY. You cannot modify Blueprints, assets, levels, or source files.
 
-Read-only tools:
+AVAILABLE MCP TOOLS (all read-only):
 - blueprint_query — inspect Blueprint variables, functions, components
 - blueprint_read_graph — read node graphs; lists ALL graphs including AnimBP state machines/transitions/conduits; extracts PropertyAccess bindings on AnimGraph nodes
 - asset_search / asset_dependencies / asset_referencers — find and trace assets
 - get_level_actors — list actors in the current level
-- get_output_log — read editor output log
+- get_output_log — read editor output log (supports filtering, cursor-based incremental reads)
 - capture_viewport — screenshot the viewport
-- open_level — switch levels
-
-Modifying tools:
-- widget_editor — create/inspect/modify UMG Widget Blueprints (add_widget, remove_widget, set_property, set_slot_property, batch)
-- blend_space — create/inspect/modify BlendSpace and AimOffset assets (add_sample, remove_sample, move_sample, set_axis, batch)
-- montage_modify — create/modify AnimMontages (sections, segments, slots, notifies, blend settings, curves)
-- anim_edit — batch-adjust bone tracks, resample, replace skeleton, extract frame range, inspect/transform skeletal mesh, set additive type
+- open_level — list available map templates (open/new/save disabled)
+- widget_editor — inspect UMG Widget Blueprint trees and properties (inspect_tree, get_properties only)
+- blend_space — inspect BlendSpace and AimOffset assets (inspect, list only)
+- montage_modify — inspect AnimMontage structure (get_info, get_curves only)
+- anim_edit — inspect animation tracks and skeletal meshes (inspect_track, inspect_mesh only)
 
 HOW TO READ A GRAPH:
 1. blueprint_query(operation="inspect", blueprint_path="...", include_functions=true)
@@ -158,6 +157,19 @@ FString FClaudeCodeSubsystem::GetProjectContextPrompt() const
 	}
 
 	return Context;
+}
+
+FString FClaudeCodeSubsystem::GetProjectInstructionsPrompt() const
+{
+	// Read CLAUDE.md from project root — this gives API backends the same project instructions
+	// that Claude Code CLI discovers automatically
+	FString ClaudeMdPath = FPaths::Combine(FPaths::ProjectDir(), TEXT("CLAUDE.md"));
+	FString Contents;
+	if (FFileHelper::LoadFileToString(Contents, *ClaudeMdPath))
+	{
+		return FString::Printf(TEXT("\n\n--- Project Instructions (CLAUDE.md) ---\n%s"), *Contents);
+	}
+	return FString();
 }
 
 void FClaudeCodeSubsystem::SetCustomSystemPrompt(const FString& InCustomPrompt)
@@ -427,6 +439,8 @@ void FClaudeCodeSubsystem::SendPromptViaBackend(
 		{
 			SystemPrompt += GetProjectContextPrompt();
 		}
+		// API backends don't auto-discover CLAUDE.md — inject project instructions
+		SystemPrompt += GetProjectInstructionsPrompt();
 		if (!CustomSystemPrompt.IsEmpty())
 		{
 			SystemPrompt += TEXT("\n\n") + CustomSystemPrompt;

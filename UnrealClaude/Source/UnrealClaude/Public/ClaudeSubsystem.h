@@ -79,6 +79,9 @@ public:
 	/** Get the project context prompt */
 	FString GetProjectContextPrompt() const;
 
+	/** Get project instructions from CLAUDE.md (for API backends that don't auto-discover it) */
+	FString GetProjectInstructionsPrompt() const;
+
 	/** Set custom system prompt additions */
 	void SetCustomSystemPrompt(const FString& InCustomPrompt);
 

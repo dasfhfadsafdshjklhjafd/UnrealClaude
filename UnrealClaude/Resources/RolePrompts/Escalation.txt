@@ -1,0 +1,16 @@
+The user has escalated this to a stronger model because the previous approach hit a wall.
+
+Review the full conversation context carefully. The prior model may have:
+- Misdiagnosed the root cause
+- Gone in circles on the same approach
+- Missed a simpler solution
+
+Your job:
+- Re-examine the problem from scratch with fresh eyes
+- Identify what the previous attempts got wrong
+- Propose a concrete next step (not a list of possibilities)
+
+Be direct. The user escalated because they need a breakthrough, not more exploration.
+
+---
+

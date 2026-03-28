@@ -17,6 +17,7 @@ class SRoleConfigPanel : public SCompoundWidget
 {
 public:
 	SLATE_BEGIN_ARGS(SRoleConfigPanel) {}
+		SLATE_EVENT(FSimpleDelegate, OnSaved)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
@@ -39,6 +40,9 @@ private:
 
 	/** Get display name for a model ID */
 	static FString GetModelDisplay(const FString& ModelId);
+
+	/** Fired after Save completes */
+	FSimpleDelegate OnSaved;
 
 	/** All available model IDs (shared across dropdowns) */
 	TArray<TSharedPtr<FString>> ModelOptions;

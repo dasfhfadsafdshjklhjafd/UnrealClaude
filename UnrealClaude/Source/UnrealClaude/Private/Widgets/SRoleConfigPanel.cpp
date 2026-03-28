@@ -32,6 +32,8 @@ FString SRoleConfigPanel::GetModelDisplay(const FString& ModelId)
 
 void SRoleConfigPanel::Construct(const FArguments& InArgs)
 {
+	OnSaved = InArgs._OnSaved;
+
 	// Build model options from all backends (not filtered by Anthropic mode — roles can target any backend)
 	FLLMBackendRegistry& Registry = FClaudeCodeSubsystem::Get().GetBackendRegistry();
 	for (ILLMBackend* Backend : Registry.GetAllBackends())
@@ -247,6 +249,8 @@ FReply SRoleConfigPanel::OnSave()
 	}
 
 	RoleManager.SaveToConfig();
+
+	OnSaved.ExecuteIfBound();
 
 	UE_LOG(LogUnrealClaude, Log, TEXT("Role assignments saved"));
 	return FReply::Handled();

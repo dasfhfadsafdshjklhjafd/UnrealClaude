@@ -184,6 +184,9 @@ void SClaudeEditorWidget::Construct(const FArguments& InArgs)
 		]
 	];
 	
+	// Initialize active model from Worker role assignment
+	SyncModelFromWorkerRole();
+
 	// Check Claude availability on startup
 	if (!IsClaudeAvailable())
 	{
@@ -275,6 +278,18 @@ void SClaudeEditorWidget::OnModelChangedWithBackendResolve(const FString& NewMod
 	FClaudeCodeSubsystem::Get().SetActiveBackendId(ResolvedBackend);
 }
 
+void SClaudeEditorWidget::SyncModelFromWorkerRole()
+{
+	FLLMRoleManager& RoleManager = FClaudeCodeSubsystem::Get().GetRoleManager();
+	FModelRoleAssignment WorkerAssignment = RoleManager.GetAssignment(EModelRole::Worker);
+
+	SelectedModel = WorkerAssignment.ModelId;
+	FClaudeCodeSubsystem::Get().SetModel(WorkerAssignment.ModelId);
+
+	FString ResolvedBackend = FClaudeCodeSubsystem::Get().GetBackendRegistry().ResolveBackendForModel(WorkerAssignment.ModelId);
+	FClaudeCodeSubsystem::Get().SetActiveBackendId(ResolvedBackend);
+}
+
 void SClaudeEditorWidget::OnAnthropicModeChanged(bool bUseCLI)
 {
 	bAnthropicUseCLI = bUseCLI;
@@ -294,7 +309,8 @@ void SClaudeEditorWidget::OnAnthropicModeChanged(bool bUseCLI)
 
 void SClaudeEditorWidget::OpenRoleConfig()
 {
-	TSharedRef<SRoleConfigPanel> Panel = SNew(SRoleConfigPanel);
+	TSharedRef<SRoleConfigPanel> Panel = SNew(SRoleConfigPanel)
+		.OnSaved_Lambda([this]() { SyncModelFromWorkerRole(); });
 
 	TSharedRef<SWidget> PopupContent =
 		SNew(SBox)
@@ -516,13 +532,27 @@ void SClaudeEditorWidget::SendMessage()
 
 	if (SelectedSendRole != EModelRole::Worker)
 	{
-		// Temporarily switch to the role's backend
+		// Load role-specific prompt template from Resources/RolePrompts/{RoleName}.txt
+		FString RoleName = GetModelRoleDisplayName(SelectedSendRole);
+		FString RolePromptPath = FPaths::ConvertRelativePathToFull(
+			FPaths::Combine(IPluginManager::Get().FindPlugin(TEXT("UnrealClaude"))->GetBaseDir(),
+				TEXT("Resources/RolePrompts"), RoleName + TEXT(".txt")));
+		FString RolePrompt;
+		FFileHelper::LoadFileToString(RolePrompt, *RolePromptPath);
+
+		// Prepend role prompt to user's message
+		FString AugmentedPrompt = RolePrompt.IsEmpty() ? Prompt : (RolePrompt + Prompt);
+
+		// Update label to show the role's model, not the worker model
 		FLLMRoleManager& RoleManager = FClaudeCodeSubsystem::Get().GetRoleManager();
 		FModelRoleAssignment Assignment = RoleManager.GetAssignment(SelectedSendRole);
-		FString PreviousBackend = FClaudeCodeSubsystem::Get().GetActiveBackendId();
+		CurrentResponseModelName = SClaudeToolbar::GetModelDisplayName(Assignment.ModelId)
+			+ TEXT(" (") + RoleName + TEXT(")");
 
+		// Temporarily switch to the role's backend
+		FString PreviousBackend = FClaudeCodeSubsystem::Get().GetActiveBackendId();
 		FClaudeCodeSubsystem::Get().SetActiveBackendId(Assignment.ProviderId);
-		FClaudeCodeSubsystem::Get().SendPromptViaBackend(Prompt, OnTurnComplete, Options, SelectedSendRole);
+		FClaudeCodeSubsystem::Get().SendPromptViaBackend(AugmentedPrompt, OnTurnComplete, Options, SelectedSendRole);
 
 		// Restore previous backend after send (the async callback handles completion)
 		FClaudeCodeSubsystem::Get().SetActiveBackendId(PreviousBackend);

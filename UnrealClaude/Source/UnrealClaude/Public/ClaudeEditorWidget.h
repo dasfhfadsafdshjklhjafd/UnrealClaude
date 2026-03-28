@@ -192,6 +192,9 @@ private:
 	/** Whether Claude models use CLI (true) or direct API (false) */
 	bool bAnthropicUseCLI = true;
 
+	/** Sync active model and backend from Worker role assignment */
+	void SyncModelFromWorkerRole();
+
 	/** Handle Anthropic mode toggle (CLI vs API) */
 	void OnAnthropicModeChanged(bool bUseCLI);
 

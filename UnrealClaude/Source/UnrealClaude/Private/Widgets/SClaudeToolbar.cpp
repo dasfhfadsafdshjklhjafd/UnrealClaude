@@ -103,28 +103,17 @@ void SClaudeToolbar::Construct(const FArguments& InArgs)
 					.TextStyle(FAppStyle::Get(), "LargeText")
 				]
 
-				// Model selector (all providers)
+				// Active worker model label (configured via Roles)
 				+ SHorizontalBox::Slot()
 				.AutoWidth()
 				.VAlign(VAlign_Center)
 				.Padding(8.0f, 0.0f)
 				[
-					SAssignNew(ModelComboBox, SComboBox<TSharedPtr<FString>>)
-					.OptionsSource(&ModelOptions)
-					.OnSelectionChanged_Lambda([this](TSharedPtr<FString> Item, ESelectInfo::Type)
-					{
-						if (Item.IsValid()) OnModelChanged.ExecuteIfBound(*Item);
-					})
-					.OnGenerateWidget_Lambda([](TSharedPtr<FString> Item) -> TSharedRef<SWidget>
-					{
-						return SNew(STextBlock).Text(FText::FromString(
-							SClaudeToolbar::GetModelDisplayName(Item.IsValid() ? *Item : FString())));
-					})
-					.ToolTipText(LOCTEXT("ModelSelectorTip", "Select model (Claude or OpenAI)"))
-					[
-						SNew(STextBlock)
-						.Text_Lambda([this]() { return FText::FromString(SClaudeToolbar::GetModelDisplayName(SelectedModel.Get())); })
-					]
+					SNew(STextBlock)
+					.Text_Lambda([this]() { return FText::FromString(SClaudeToolbar::GetModelDisplayName(SelectedModel.Get())); })
+					.TextStyle(FAppStyle::Get(), "SmallText")
+					.ColorAndOpacity(FSlateColor(FLinearColor(0.5f, 0.7f, 0.9f)))
+					.ToolTipText(LOCTEXT("WorkerModelTip", "Active worker model (change via Roles button)"))
 				]
 
 				// Anthropic: CLI / API toggle

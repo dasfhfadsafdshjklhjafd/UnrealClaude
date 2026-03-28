@@ -138,6 +138,56 @@ UEdGraph* FMCPTool_BlueprintGraphRead::FindGraphByName(
 	return nullptr;
 }
 
+// Strip all _N_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX GUID patterns from a string.
+// Applied to both pin names and default value strings (struct field paths contain the same noise).
+static FString StripGuids(const FString& S)
+{
+	FString Result;
+	Result.Reserve(S.Len());
+	int32 i = 0;
+	while (i < S.Len())
+	{
+		if (S[i] == '_' && i + 2 < S.Len() && FChar::IsDigit(S[i + 1]))
+		{
+			int32 j = i + 1;
+			while (j < S.Len() && FChar::IsDigit(S[j])) j++;
+			if (j < S.Len() && S[j] == '_' && j + 32 < S.Len())
+			{
+				bool bAllHex = true;
+				for (int32 k = j + 1; k <= j + 32; k++)
+				{
+					const TCHAR C = S[k];
+					if (!((C >= '0' && C <= '9') || (C >= 'A' && C <= 'F') || (C >= 'a' && C <= 'f')))
+					{ bAllHex = false; break; }
+				}
+				if (bAllHex) { i = j + 33; continue; }
+			}
+		}
+		Result += S[i++];
+	}
+	return Result;
+}
+
+// Transparently follow K2Node_Knot (reroute) chains to the real connected pin.
+// Returns null if the chain is dangling (reroute with nothing connected on the other side).
+static UEdGraphPin* ResolveReroute(UEdGraphPin* Pin, int32 MaxDepth = 12)
+{
+	while (Pin && MaxDepth-- > 0)
+	{
+		UEdGraphNode* Owner = Pin->GetOwningNodeUnchecked();
+		if (!Owner || Owner->GetClass()->GetFName() != TEXT("K2Node_Knot"))
+			return Pin;
+		const FName OtherName = (Pin->PinName == TEXT("InputPin"))
+			? FName(TEXT("OutputPin")) : FName(TEXT("InputPin"));
+		UEdGraphPin* Other = nullptr;
+		for (UEdGraphPin* KP : Owner->Pins)
+			if (KP && KP->PinName == OtherName) { Other = KP; break; }
+		if (!Other || Other->LinkedTo.Num() == 0) return nullptr;
+		Pin = Other->LinkedTo[0];
+	}
+	return Pin;
+}
+
 TSharedPtr<FJsonObject> FMCPTool_BlueprintGraphRead::SerializeGraph(
 	UEdGraph* Graph,
 	int32 StartNode,
@@ -146,14 +196,13 @@ TSharedPtr<FJsonObject> FMCPTool_BlueprintGraphRead::SerializeGraph(
 {
 	bOutTruncated = false;
 
-	// Build index map across all nodes (indices are stable across paging calls)
+	// Build index map across all nodes including reroutes (indices match Graph->Nodes positions,
+	// which are stable across paging calls and used as cross-reference keys in link pairs).
 	TMap<UEdGraphNode*, int32> IndexMap;
 	for (int32 i = 0; i < Graph->Nodes.Num(); i++)
 	{
 		if (Graph->Nodes[i])
-		{
 			IndexMap.Add(Graph->Nodes[i], i);
-		}
 	}
 
 	TSharedPtr<FJsonObject> GraphObj = MakeShared<FJsonObject>();
@@ -168,6 +217,11 @@ TSharedPtr<FJsonObject> FMCPTool_BlueprintGraphRead::SerializeGraph(
 	{
 		UEdGraphNode* Node = Graph->Nodes[i];
 		if (!Node) continue;
+
+		// Reroute nodes are visual-only pass-throughs. Skip them in output — their links
+		// are resolved transparently in SerializeNode so connections appear direct.
+		// n: indices will have gaps where reroutes were; that is intentional and correct.
+		if (Node->GetClass()->GetFName() == TEXT("K2Node_Knot")) continue;
 
 		if (OutputCount >= MaxNodes)
 		{
@@ -191,6 +245,14 @@ TSharedPtr<FJsonObject> FMCPTool_BlueprintGraphRead::SerializeNode(
 {
 	TSharedPtr<FJsonObject> NodeObj = MakeShared<FJsonObject>();
 
+	// Comment nodes: title always duplicates comment and pins are always empty.
+	if (Node->GetClass()->GetFName() == TEXT("EdGraphNode_Comment"))
+	{
+		if (!Node->NodeComment.IsEmpty())
+			NodeObj->SetStringField(TEXT("comment"), Node->NodeComment);
+		return NodeObj;
+	}
+
 	// Node type (class name without module prefix noise)
 	NodeObj->SetStringField(TEXT("type"), Node->GetClass()->GetFName().ToString());
 
@@ -198,19 +260,15 @@ TSharedPtr<FJsonObject> FMCPTool_BlueprintGraphRead::SerializeNode(
 	FText Title = Node->GetNodeTitle(ENodeTitleType::FullTitle);
 	NodeObj->SetStringField(TEXT("title"), Title.ToString());
 
-	// Comment (often carries important designer intent)
+	// Comment (carries designer intent)
 	if (!Node->NodeComment.IsEmpty())
-	{
 		NodeObj->SetStringField(TEXT("comment"), Node->NodeComment);
-	}
 
 	// Pure flag (no exec pins, no side effects)
 	if (UK2Node* K2Node = Cast<UK2Node>(Node))
 	{
 		if (K2Node->IsNodePure())
-		{
 			NodeObj->SetBoolField(TEXT("pure"), true);
-		}
 	}
 
 	// Pins
@@ -219,16 +277,23 @@ TSharedPtr<FJsonObject> FMCPTool_BlueprintGraphRead::SerializeNode(
 	{
 		if (!Pin || Pin->bHidden) continue;
 
+		// Skip always-noise pins
+		const FName RawPinName = Pin->PinName;
+		if (RawPinName == TEXT("OutputDelegate")) continue; // UE internal event-binding, never meaningful
+		if (RawPinName == TEXT("self")
+			&& Pin->PinType.PinCategory == TEXT("object")
+			&& Pin->LinkedTo.Num() == 0) continue; // implicit self-target with no explicit link
+
+		const FString CleanName = StripGuids(RawPinName.ToString());
+
 		TSharedPtr<FJsonObject> PinObj = MakeShared<FJsonObject>();
-		PinObj->SetStringField(TEXT("name"), Pin->PinName.ToString());
+		PinObj->SetStringField(TEXT("name"), CleanName);
 		PinObj->SetStringField(TEXT("dir"), Pin->Direction == EGPD_Input ? TEXT("in") : TEXT("out"));
 		PinObj->SetStringField(TEXT("kind"), Pin->PinType.PinCategory.ToString());
 
-		// Sub-type for object/struct/class pins (e.g. "BP_PlayerBase", "FHitResult")
+		// Sub-type for object/struct/class pins
 		if (Pin->PinType.PinSubCategoryObject.IsValid())
-		{
 			PinObj->SetStringField(TEXT("sub"), Pin->PinType.PinSubCategoryObject->GetName());
-		}
 
 		// Container type
 		if (Pin->PinType.ContainerType == EPinContainerType::Array)
@@ -238,20 +303,22 @@ TSharedPtr<FJsonObject> FMCPTool_BlueprintGraphRead::SerializeNode(
 		else if (Pin->PinType.ContainerType == EPinContainerType::Map)
 			PinObj->SetStringField(TEXT("container"), TEXT("map"));
 
-		// Default value (only for unconnected data pins — skip exec)
+		// Default value — also strip GUIDs inside struct field path strings
 		if (Pin->LinkedTo.Num() == 0
 			&& !Pin->DefaultValue.IsEmpty()
 			&& Pin->PinType.PinCategory != TEXT("exec"))
 		{
-			PinObj->SetStringField(TEXT("default"), Pin->DefaultValue);
+			PinObj->SetStringField(TEXT("default"), StripGuids(Pin->DefaultValue));
 		}
 
 		// Connections: [[targetNodeIndex, targetPinName], ...]
+		// Resolve through reroute nodes so connections appear direct.
 		if (Pin->LinkedTo.Num() > 0)
 		{
 			TArray<TSharedPtr<FJsonValue>> LinkedArray;
-			for (UEdGraphPin* LinkedPin : Pin->LinkedTo)
+			for (UEdGraphPin* RawLinkedPin : Pin->LinkedTo)
 			{
+				UEdGraphPin* LinkedPin = ResolveReroute(RawLinkedPin);
 				if (!LinkedPin) continue;
 				UEdGraphNode* TargetNode = LinkedPin->GetOwningNodeUnchecked();
 				if (!TargetNode) continue;
@@ -260,7 +327,7 @@ TSharedPtr<FJsonObject> FMCPTool_BlueprintGraphRead::SerializeNode(
 
 				TArray<TSharedPtr<FJsonValue>> LinkPair;
 				LinkPair.Add(MakeShared<FJsonValueNumber>(*TargetIdx));
-				LinkPair.Add(MakeShared<FJsonValueString>(LinkedPin->PinName.ToString()));
+				LinkPair.Add(MakeShared<FJsonValueString>(StripGuids(LinkedPin->PinName.ToString())));
 				LinkedArray.Add(MakeShared<FJsonValueArray>(LinkPair));
 			}
 			if (LinkedArray.Num() > 0)

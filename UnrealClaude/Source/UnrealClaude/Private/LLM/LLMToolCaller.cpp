@@ -89,8 +89,17 @@ TSharedPtr<FJsonObject> FLLMToolCaller::BuildInputSchema(const FMCPToolInfo& Too
 	for (const FMCPToolParameter& Param : Tool.Parameters)
 	{
 		TSharedPtr<FJsonObject> PropObj = MakeShared<FJsonObject>();
-		PropObj->SetStringField(TEXT("type"), ToJsonSchemaType(Param.Type));
+		FString SchemaType = ToJsonSchemaType(Param.Type);
+		PropObj->SetStringField(TEXT("type"), SchemaType);
 		PropObj->SetStringField(TEXT("description"), Param.Description);
+
+		// Array types require an items field — default to string elements
+		if (SchemaType == TEXT("array"))
+		{
+			TSharedPtr<FJsonObject> ItemsObj = MakeShared<FJsonObject>();
+			ItemsObj->SetStringField(TEXT("type"), TEXT("string"));
+			PropObj->SetObjectField(TEXT("items"), ItemsObj);
+		}
 
 		Properties->SetObjectField(Param.Name, PropObj);
 

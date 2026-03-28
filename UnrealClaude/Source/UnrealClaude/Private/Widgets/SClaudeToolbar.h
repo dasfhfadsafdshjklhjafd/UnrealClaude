@@ -88,6 +88,7 @@ private:
 	TSharedPtr<SComboBox<TSharedPtr<EModelRole>>> RoleComboBox;
 	EModelRole SelectedSendRole = EModelRole::Worker;
 
+public:
 	/** Get display name for a model, including provider hint */
 	static FString GetModelDisplayName(const FString& ModelId);
 };

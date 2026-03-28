@@ -61,7 +61,17 @@ void SChatMessage::Construct(const FArguments& InArgs)
 		? FLinearColor(0.4f, 0.6f, 1.0f)   // Light blue
 		: FLinearColor(0.9f, 0.6f, 0.3f);  // Warm orange
 
-	FString RoleLabel = bIsUser ? TEXT("> You") : TEXT("Claude");
+	FString RoleLabel;
+	if (bIsUser)
+	{
+		RoleLabel = TEXT("> You");
+	}
+	else
+	{
+		// Show model display name instead of hardcoded "Claude"
+		const FString& ModelId = FClaudeCodeSubsystem::Get().GetModel();
+		RoleLabel = SClaudeToolbar::GetModelDisplayName(ModelId);
+	}
 
 	ChildSlot
 	[
@@ -482,15 +492,15 @@ void SClaudeEditorWidget::SendMessage()
 	Options.OnStreamEvent.BindSP(this, &SClaudeEditorWidget::OnClaudeStreamEvent);
 	Options.AttachedImagePaths = ImagePaths;
 
+	// Route all messages through the backend system (respects active backend selection)
+	FOnLLMTurnComplete OnTurnComplete;
+	OnTurnComplete.BindLambda([this](const FLLMTurnResult& Result)
+	{
+		OnClaudeResponse(Result.ResponseText, Result.bSuccess);
+	});
+
 	if (SelectedSendRole != EModelRole::Worker)
 	{
-		// Route through the role's assigned model/backend
-		FOnLLMTurnComplete OnTurnComplete;
-		OnTurnComplete.BindLambda([this](const FLLMTurnResult& Result)
-		{
-			OnClaudeResponse(Result.ResponseText, Result.bSuccess);
-		});
-
 		// Temporarily switch to the role's backend
 		FLLMRoleManager& RoleManager = FClaudeCodeSubsystem::Get().GetRoleManager();
 		FModelRoleAssignment Assignment = RoleManager.GetAssignment(SelectedSendRole);
@@ -504,10 +514,8 @@ void SClaudeEditorWidget::SendMessage()
 	}
 	else
 	{
-		// Default Worker path — use existing SendPrompt
-		FOnClaudeResponse OnComplete;
-		OnComplete.BindSP(this, &SClaudeEditorWidget::OnClaudeResponse);
-		FClaudeCodeSubsystem::Get().SendPrompt(Prompt, OnComplete, Options);
+		// Worker path — route through active backend (CLI, Anthropic API, or OpenAI API)
+		FClaudeCodeSubsystem::Get().SendPromptViaBackend(Prompt, OnTurnComplete, Options, EModelRole::Worker);
 	}
 }
 
@@ -893,7 +901,7 @@ void SClaudeEditorWidget::StartStreamingResponse()
 		.Padding(0, 0, 0, 6)
 		[
 			SNew(STextBlock)
-			.Text(FText::FromString(TEXT("Claude")))
+			.Text(FText::FromString(SClaudeToolbar::GetModelDisplayName(SelectedModel)))
 			.TextStyle(FAppStyle::Get(), "SmallText")
 			.ColorAndOpacity(FSlateColor(FLinearColor(0.9f, 0.6f, 0.3f)))
 		]

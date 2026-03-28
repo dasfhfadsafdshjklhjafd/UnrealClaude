@@ -68,9 +68,12 @@ void SChatMessage::Construct(const FArguments& InArgs)
 	}
 	else
 	{
-		// Show model display name instead of hardcoded "Claude"
-		const FString& ModelId = FClaudeCodeSubsystem::Get().GetModel();
-		RoleLabel = SClaudeToolbar::GetModelDisplayName(ModelId);
+		// Use stored sender name, fall back to current model
+		RoleLabel = InArgs._SenderName;
+		if (RoleLabel.IsEmpty())
+		{
+			RoleLabel = SClaudeToolbar::GetModelDisplayName(FClaudeCodeSubsystem::Get().GetModel());
+		}
 	}
 
 	ChildSlot
@@ -220,7 +223,13 @@ TSharedRef<SWidget> SClaudeEditorWidget::BuildToolbar()
 		.OnCopyChat_Lambda([this]() { CopyWholeChat(); })
 		.OnCompact_Lambda([this]() { CompactSession(); })
 		.OnRoleConfig_Lambda([this]() { OpenRoleConfig(); })
-		.OnSendRoleChanged_Lambda([this](EModelRole Role) { SelectedSendRole = Role; })
+		.OnSendRoleChanged_Lambda([this](EModelRole Role)
+		{
+			// Role buttons trigger an immediate send through that role
+			SelectedSendRole = Role;
+			SendMessage();
+			SelectedSendRole = EModelRole::Worker; // Reset after send
+		})
 		.SelectedModel_Lambda([this]() { return SelectedModel; })
 		.bAnthropicUseCLI_Lambda([this]() { return bAnthropicUseCLI; })
 		.TokenCountText_Lambda([this]() -> FText
@@ -380,7 +389,7 @@ TSharedRef<SWidget> SClaudeEditorWidget::BuildStatusBar()
 		];
 }
 
-void SClaudeEditorWidget::AddMessage(const FString& Message, bool bIsUser)
+void SClaudeEditorWidget::AddMessage(const FString& Message, bool bIsUser, const FString& SenderName)
 {
 	if (ChatMessagesBox.IsValid())
 	{
@@ -403,6 +412,7 @@ void SClaudeEditorWidget::AddMessage(const FString& Message, bool bIsUser)
 			SNew(SChatMessage)
 			.Message(Message)
 			.IsUser(bIsUser)
+			.SenderName(SenderName)
 		];
 
 		// Scroll to bottom
@@ -481,6 +491,9 @@ void SClaudeEditorWidget::SendMessage()
 	// Set waiting state
 	bIsWaitingForResponse = true;
 
+	// Capture model name at send time so it persists through async response
+	CurrentResponseModelName = SClaudeToolbar::GetModelDisplayName(SelectedModel);
+
 	// Start streaming response display
 	StartStreamingResponse();
 
@@ -496,7 +509,9 @@ void SClaudeEditorWidget::SendMessage()
 	FOnLLMTurnComplete OnTurnComplete;
 	OnTurnComplete.BindLambda([this](const FLLMTurnResult& Result)
 	{
-		OnClaudeResponse(Result.ResponseText, Result.bSuccess);
+		// Use ErrorMessage for failed requests (ResponseText may be empty on API errors)
+		FString DisplayText = Result.bSuccess ? Result.ResponseText : Result.ErrorMessage;
+		OnClaudeResponse(DisplayText, Result.bSuccess);
 	});
 
 	if (SelectedSendRole != EModelRole::Worker)
@@ -545,13 +560,13 @@ void SClaudeEditorWidget::OnClaudeResponse(const FString& Response, bool bSucces
 		// Only add a new bubble if we had no streaming bubble at all
 		if (StreamingResponse.IsEmpty())
 		{
-			AddMessage(Response, false);
+			AddMessage(Response, false, CurrentResponseModelName);
 		}
 	}
 	else
 	{
 		FinalizeStreamingResponse();
-		AddMessage(FString::Printf(TEXT("Error: %s"), *Response), false);
+		AddMessage(FString::Printf(TEXT("Error: %s"), *Response), false, CurrentResponseModelName);
 	}
 
 	// Clear streaming state
@@ -901,7 +916,7 @@ void SClaudeEditorWidget::StartStreamingResponse()
 		.Padding(0, 0, 0, 6)
 		[
 			SNew(STextBlock)
-			.Text(FText::FromString(SClaudeToolbar::GetModelDisplayName(SelectedModel)))
+			.Text(FText::FromString(CurrentResponseModelName))
 			.TextStyle(FAppStyle::Get(), "SmallText")
 			.ColorAndOpacity(FSlateColor(FLinearColor(0.9f, 0.6f, 0.3f)))
 		]

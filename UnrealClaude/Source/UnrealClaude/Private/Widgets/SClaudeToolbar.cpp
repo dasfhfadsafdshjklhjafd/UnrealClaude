@@ -276,48 +276,46 @@ void SClaudeToolbar::Construct(const FArguments& InArgs)
 					.ToolTipText(LOCTEXT("CompactTip", "Summarize conversation to free up context window"))
 				]
 
-				// Role selector (Send as...)
+				// Role action buttons (each fires OnSendRoleChanged to route next message)
 				+ SHorizontalBox::Slot()
 				.AutoWidth()
 				.VAlign(VAlign_Center)
-				.Padding(4.0f, 0.0f)
+				.Padding(4.0f, 0.0f, 0.0f, 0.0f)
 				[
-					SNew(SHorizontalBox)
-					+ SHorizontalBox::Slot()
-					.AutoWidth()
-					.VAlign(VAlign_Center)
-					.Padding(0.0f, 0.0f, 2.0f, 0.0f)
-					[
-						SNew(STextBlock)
-						.Text(LOCTEXT("SendAs", "Send as:"))
-						.TextStyle(FAppStyle::Get(), "SmallText")
-						.ColorAndOpacity(FSlateColor(FLinearColor(0.5f, 0.5f, 0.55f)))
-					]
-					+ SHorizontalBox::Slot()
-					.AutoWidth()
-					.VAlign(VAlign_Center)
-					[
-						SAssignNew(RoleComboBox, SComboBox<TSharedPtr<EModelRole>>)
-						.OptionsSource(&RoleOptions)
-						.OnSelectionChanged_Lambda([this](TSharedPtr<EModelRole> Item, ESelectInfo::Type)
-						{
-							if (Item.IsValid())
-							{
-								SelectedSendRole = *Item;
-								OnSendRoleChanged.ExecuteIfBound(SelectedSendRole);
-							}
-						})
-						.OnGenerateWidget_Lambda([](TSharedPtr<EModelRole> Item) -> TSharedRef<SWidget>
-						{
-							return SNew(STextBlock).Text(FText::FromString(
-								Item.IsValid() ? GetModelRoleDisplayName(*Item) : FString()));
-						})
-						.ToolTipText(LOCTEXT("SendRoleTip", "Choose which role processes your next message.\nWorker = default, Architect = design review, Escalation = fallback to stronger model"))
-						[
-							SNew(STextBlock)
-							.Text_Lambda([this]() { return FText::FromString(GetModelRoleDisplayName(SelectedSendRole)); })
-						]
-					]
+					SNew(SButton)
+					.Text(LOCTEXT("AskCritic", "Critic"))
+					.OnClicked_Lambda([this]() { OnSendRoleChanged.ExecuteIfBound(EModelRole::Critic); return FReply::Handled(); })
+					.ToolTipText(LOCTEXT("CriticTip", "Send your message for review by the Critic model"))
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				.Padding(2.0f, 0.0f, 0.0f, 0.0f)
+				[
+					SNew(SButton)
+					.Text(LOCTEXT("AskArchitect", "Architect"))
+					.OnClicked_Lambda([this]() { OnSendRoleChanged.ExecuteIfBound(EModelRole::Architect); return FReply::Handled(); })
+					.ToolTipText(LOCTEXT("ArchitectTip", "Send your message for architecture review"))
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				.Padding(2.0f, 0.0f, 0.0f, 0.0f)
+				[
+					SNew(SButton)
+					.Text(LOCTEXT("Escalate", "Escalate"))
+					.OnClicked_Lambda([this]() { OnSendRoleChanged.ExecuteIfBound(EModelRole::Escalation); return FReply::Handled(); })
+					.ToolTipText(LOCTEXT("EscalateTip", "Escalate to a stronger model (when stuck)"))
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				.Padding(2.0f, 0.0f, 0.0f, 0.0f)
+				[
+					SNew(SButton)
+					.Text(LOCTEXT("WriteDocs", "Docs"))
+					.OnClicked_Lambda([this]() { OnSendRoleChanged.ExecuteIfBound(EModelRole::DocsAgent); return FReply::Handled(); })
+					.ToolTipText(LOCTEXT("DocsTip", "Route to DocsAgent for documentation edits"))
 				]
 
 				+ SHorizontalBox::Slot()

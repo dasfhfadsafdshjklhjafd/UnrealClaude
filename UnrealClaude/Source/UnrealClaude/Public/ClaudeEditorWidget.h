@@ -27,6 +27,7 @@ public:
 	{}
 		SLATE_ARGUMENT(FString, Message)
 		SLATE_ARGUMENT(bool, IsUser)
+		SLATE_ARGUMENT(FString, SenderName)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
@@ -52,8 +53,8 @@ private:
 	TSharedRef<SWidget> BuildInputArea();
 	TSharedRef<SWidget> BuildStatusBar();
 	
-	/** Add a message to the chat display */
-	void AddMessage(const FString& Message, bool bIsUser);
+	/** Add a message to the chat display (SenderName is stored per-message for history) */
+	void AddMessage(const FString& Message, bool bIsUser, const FString& SenderName = FString());
 	
 	/** Add streaming response (appends to last assistant message) */
 	void AppendToLastResponse(const FString& Text);
@@ -121,6 +122,9 @@ private:
 
 	/** Last response for copying */
 	FString LastResponse;
+
+	/** Display name of the model that is currently responding (captured at send time) */
+	FString CurrentResponseModelName;
 
 	/** Accumulated streaming response */
 	FString StreamingResponse;

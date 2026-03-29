@@ -1165,11 +1165,7 @@ void SClaudeEditorWidget::OnClaudeStreamEvent(const FClaudeStreamEvent& Event)
 
 	case EClaudeStreamEventType::TextContent:
 		UE_LOG(LogUnrealClaude, Log, TEXT("[StreamEvent] TextContent: %d chars"), Event.Text.Len());
-		// For API backends, render text via OnClaudeProgress (CLI already does this via its own OnProgress callback)
-		if (FClaudeCodeSubsystem::Get().IsAPIBackend())
-		{
-			OnClaudeProgress(Event.Text);
-		}
+		OnClaudeProgress(Event.Text);
 		break;
 
 	case EClaudeStreamEventType::ToolUse:

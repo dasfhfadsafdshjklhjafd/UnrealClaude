@@ -737,17 +737,7 @@ void FClaudeCodeRunner::ParseAndEmitNdjsonLine(const FString& JsonLine)
 					UE_LOG(LogUnrealClaude, Log, TEXT("NDJSON TextContent: %d chars"), Text.Len());
 					AccumulatedResponseText += Text;
 
-					// Fire old progress delegate for backward compat
-					if (OnProgressDelegate.IsBound())
-					{
-						FOnClaudeProgress ProgressCopy = OnProgressDelegate;
-						AsyncTask(ENamedThreads::GameThread, [ProgressCopy, Text]()
-						{
-							ProgressCopy.ExecuteIfBound(Text);
-						});
-					}
-
-					// Fire new structured event
+					// Fire structured event (widget routes text via OnClaudeStreamEvent → OnClaudeProgress)
 					if (CurrentConfig.OnStreamEvent.IsBound())
 					{
 						FClaudeStreamEvent Event;

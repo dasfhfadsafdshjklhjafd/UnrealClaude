@@ -39,6 +39,13 @@ FMCPToolResult FMCPTool_BlueprintGraphRead::Execute(const TSharedRef<FJsonObject
 		return ExecuteListGraphs(Blueprint);
 	}
 
+	bool bSummaryOnly = false;
+	Params->TryGetBoolField(TEXT("summary_only"), bSummaryOnly);
+	if (bSummaryOnly)
+	{
+		return ExecuteSummarizeGraph(Blueprint, GraphName);
+	}
+
 	int32 MaxNodes = FMath::Clamp(ExtractOptionalNumber<int32>(Params, TEXT("max_nodes"), 150), 1, 1000);
 	int32 StartNode = FMath::Max(ExtractOptionalNumber<int32>(Params, TEXT("start_node"), 0), 0);
 	return ExecuteReadGraph(Blueprint, GraphName, MaxNodes, StartNode);
@@ -117,6 +124,61 @@ FMCPToolResult FMCPTool_BlueprintGraphRead::ExecuteReadGraph(
 		FString::Printf(TEXT("Graph '%s' in '%s' (%s) — %d total nodes"),
 			*GraphName, *Blueprint->GetName(), *GraphType, Graph->Nodes.Num()),
 		GraphData
+	);
+}
+
+FMCPToolResult FMCPTool_BlueprintGraphRead::ExecuteSummarizeGraph(
+	UBlueprint* Blueprint,
+	const FString& GraphName)
+{
+	FString GraphType;
+	UEdGraph* Graph = FindGraphByName(Blueprint, GraphName, GraphType);
+	if (!Graph)
+	{
+		return FMCPToolResult::Error(FString::Printf(
+			TEXT("Graph '%s' not found in '%s'. Call without graph_name to list available graphs."),
+			*GraphName, *Blueprint->GetName()));
+	}
+
+	TSharedPtr<FJsonObject> Response = MakeShared<FJsonObject>();
+	Response->SetStringField(TEXT("blueprint"), Blueprint->GetName());
+	Response->SetStringField(TEXT("graph"), GraphName);
+	Response->SetStringField(TEXT("graph_type"), GraphType);
+	Response->SetNumberField(TEXT("node_count"), Graph->Nodes.Num());
+	Response->SetStringField(TEXT("hint"), TEXT("Use start_node+max_nodes to read specific node ranges after identifying relevant indices here"));
+
+	TArray<TSharedPtr<FJsonValue>> NodesArray;
+	for (int32 i = 0; i < Graph->Nodes.Num(); i++)
+	{
+		UEdGraphNode* Node = Graph->Nodes[i];
+		if (!Node) continue;
+		if (Node->GetClass()->GetFName() == TEXT("K2Node_Knot")) continue;
+
+		TSharedPtr<FJsonObject> NodeObj = MakeShared<FJsonObject>();
+		NodeObj->SetNumberField(TEXT("n"), i);
+
+		if (Node->GetClass()->GetFName() == TEXT("EdGraphNode_Comment"))
+		{
+			if (!Node->NodeComment.IsEmpty())
+				NodeObj->SetStringField(TEXT("comment"), Node->NodeComment);
+		}
+		else
+		{
+			NodeObj->SetStringField(TEXT("type"), Node->GetClass()->GetFName().ToString());
+			NodeObj->SetStringField(TEXT("title"), Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString());
+			if (!Node->NodeComment.IsEmpty())
+				NodeObj->SetStringField(TEXT("comment"), Node->NodeComment);
+		}
+
+		NodesArray.Add(MakeShared<FJsonValueObject>(NodeObj));
+	}
+
+	Response->SetArrayField(TEXT("nodes"), NodesArray);
+
+	return FMCPToolResult::Success(
+		FString::Printf(TEXT("Summary of '%s' in '%s' — %d nodes (no pin data)"),
+			*GraphName, *Blueprint->GetName(), Graph->Nodes.Num()),
+		Response
 	);
 }
 

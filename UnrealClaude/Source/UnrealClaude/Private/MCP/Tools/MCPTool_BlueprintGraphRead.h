@@ -31,20 +31,25 @@ public:
 			"Read Blueprint node graph structure (read-only).\n\n"
 			"Usage:\n"
 			"- Omit 'graph_name' to list all graphs in the Blueprint with their node counts.\n"
-			"- Provide 'graph_name' to get the full node/pin/connection structure of that graph.\n\n"
+			"- Provide 'graph_name' to get the full node/pin/connection structure of that graph.\n"
+			"- Add 'summary_only: true' with graph_name to get a lightweight node list (titles/types/comments, no pins). "
+			"Use this first to locate relevant nodes cheaply, then read specific ranges with start_node.\n\n"
 			"Output format: nodes are indexed 0..N. Pin connections reference [targetNodeIndex, pinName].\n"
 			"Pin 'kind' values: 'exec' (execution flow), 'bool', 'float', 'int', 'object', 'struct', etc.\n\n"
 			"For large graphs use 'max_nodes' to page through in chunks (start_node + max_nodes).\n\n"
 			"Example paths:\n"
 			"- '/Game/Core/Characters/BP_PlayerBase'\n"
 			"- '/Game/Weapons/BP_RifleBase'\n\n"
-			"Always call without graph_name first to discover available graphs."
+			"Always call without graph_name first to discover available graphs.\n"
+			"For large graphs, use summary_only=true next to find relevant node indices, then read only those ranges."
 		);
 		Info.Parameters = {
 			FMCPToolParameter(TEXT("blueprint_path"), TEXT("string"),
 				TEXT("Full Blueprint asset path e.g. '/Game/Core/Characters/BP_PlayerBase'"), true),
 			FMCPToolParameter(TEXT("graph_name"), TEXT("string"),
 				TEXT("Graph to read. Omit to list all graphs."), false),
+			FMCPToolParameter(TEXT("summary_only"), TEXT("boolean"),
+				TEXT("Return lightweight node list (title/type/comment only, no pins). Use to locate relevant nodes before reading full details."), false),
 			FMCPToolParameter(TEXT("max_nodes"), TEXT("number"),
 				TEXT("Max nodes to return (default: 150). Increase for large graphs."), false, TEXT("150")),
 			FMCPToolParameter(TEXT("start_node"), TEXT("number"),
@@ -59,6 +64,7 @@ public:
 private:
 	FMCPToolResult ExecuteListGraphs(UBlueprint* Blueprint);
 	FMCPToolResult ExecuteReadGraph(UBlueprint* Blueprint, const FString& GraphName, int32 MaxNodes, int32 StartNode);
+	FMCPToolResult ExecuteSummarizeGraph(UBlueprint* Blueprint, const FString& GraphName);
 
 	static UEdGraph* FindGraphByName(UBlueprint* Blueprint, const FString& GraphName, FString& OutType);
 	static TSharedPtr<FJsonObject> SerializeGraph(UEdGraph* Graph, int32 StartNode, int32 MaxNodes, bool& bOutTruncated);

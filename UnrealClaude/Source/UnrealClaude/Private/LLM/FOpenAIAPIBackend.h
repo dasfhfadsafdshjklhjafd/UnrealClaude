@@ -62,22 +62,8 @@ private:
 	/** Build the JSON request body for Chat Completions (includes read-only tools) */
 	FString BuildRequestBody(FLLMSessionState& Session, const FString& ModelId, int32 MaxTokens = 8192) const;
 
-	/** Parse a non-streaming response */
+	/** Parse a non-streaming response (legacy, kept for compatibility) */
 	FLLMTurnResult ParseResponse(const FString& ResponseBody, const FString& ModelId) const;
-
-	/**
-	 * Handle a single HTTP response. If tools were called, executes them and
-	 * fires the next request. Otherwise completes the turn.
-	 */
-	void HandleResponse(
-		const FString& ResponseBody,
-		const FString& ModelId,
-		const FGuid& SessionId,
-		FOnLLMTurnComplete OnComplete,
-		FOnLLMStreamProgress OnProgress,
-		TSharedPtr<FLLMTokenUsage> AccumulatedUsage,
-		TSharedPtr<FString> AccumulatedText,
-		int32 ToolLoopCount);
 
 	/** Send a request (initial or tool-loop continuation) */
 	void SendRequest(

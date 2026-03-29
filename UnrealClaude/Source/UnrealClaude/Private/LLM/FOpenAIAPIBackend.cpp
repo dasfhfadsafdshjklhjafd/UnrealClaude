@@ -138,6 +138,38 @@ bool FOpenAIAPIBackend::SubmitTurn(
 	return true;
 }
 
+// ============================================================================
+// SSE Streaming
+// ============================================================================
+
+namespace
+{
+	/** Per-tool-call accumulation state (OpenAI sends tool calls in delta chunks by index) */
+	struct FOpenAIPendingToolCall
+	{
+		FString Id;
+		FString Name;
+		FString Arguments; // accumulated function.arguments chunks
+	};
+
+	/** Per-request SSE parse state, shared between OnRequestProgress and OnProcessRequestComplete */
+	struct FOpenAISSEState
+	{
+		FString LineBuffer;
+		int32 BytesProcessed = 0;
+
+		// Text content from this turn (may appear before tool calls)
+		FString ResponseText;
+
+		// Tool calls accumulated by index
+		TMap<int32, FOpenAIPendingToolCall> PendingToolCalls;
+
+		// Stream end state
+		FString FinishReason;
+		bool bStreamComplete = false;
+	};
+}
+
 void FOpenAIAPIBackend::SendRequest(
 	const FGuid& SessionId,
 	const FString& ModelId,
@@ -167,8 +199,134 @@ void FOpenAIAPIBackend::SendRequest(
 	Request->SetHeader(TEXT("Authorization"), FString::Printf(TEXT("Bearer %s"), *APIKey));
 	Request->SetContentAsString(RequestBody);
 
+	TSharedPtr<FOpenAISSEState> SSEState = MakeShared<FOpenAISSEState>();
+
+	// Parse SSE chunks as they arrive and emit stream events
+	Request->OnRequestProgress64().BindLambda(
+		[this, OnProgress, AccumulatedUsage, SSEState]
+		(FHttpRequestPtr Req, uint64 /*BytesSent*/, uint64 /*BytesReceived*/)
+	{
+		if (!Req->GetResponse().IsValid()) return;
+
+		FString FullContent = Req->GetResponse()->GetContentAsString();
+		if (FullContent.Len() <= SSEState->BytesProcessed) return;
+
+		SSEState->LineBuffer += FullContent.Mid(SSEState->BytesProcessed);
+		SSEState->BytesProcessed = FullContent.Len();
+
+		// Process all complete lines from the buffer
+		int32 NewlineIdx;
+		while (SSEState->LineBuffer.FindChar(TEXT('\n'), NewlineIdx))
+		{
+			FString Line = SSEState->LineBuffer.Left(NewlineIdx).TrimEnd();
+			SSEState->LineBuffer = SSEState->LineBuffer.Mid(NewlineIdx + 1);
+
+			if (Line.IsEmpty() || !Line.StartsWith(TEXT("data:"))) continue;
+
+			FString Data = Line.Mid(5).TrimStart();
+
+			if (Data == TEXT("[DONE]"))
+			{
+				SSEState->bStreamComplete = true;
+				continue;
+			}
+
+			TSharedPtr<FJsonObject> EventJson;
+			TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Data);
+			if (!FJsonSerializer::Deserialize(Reader, EventJson) || !EventJson.IsValid()) continue;
+
+			// Extract usage if present (stream_options: {include_usage: true} sends it last)
+			const TSharedPtr<FJsonObject>* UsageObj = nullptr;
+			if (EventJson->TryGetObjectField(TEXT("usage"), UsageObj) && UsageObj)
+			{
+				int32 InTokens = 0, OutTokens = 0, CachedTokens = 0;
+				(*UsageObj)->TryGetNumberField(TEXT("prompt_tokens"), InTokens);
+				(*UsageObj)->TryGetNumberField(TEXT("completion_tokens"), OutTokens);
+				const TSharedPtr<FJsonObject>* PromptDetails = nullptr;
+				if ((*UsageObj)->TryGetObjectField(TEXT("prompt_tokens_details"), PromptDetails) && PromptDetails)
+				{
+					(*PromptDetails)->TryGetNumberField(TEXT("cached_tokens"), CachedTokens);
+				}
+				AccumulatedUsage->InputTokens += InTokens;
+				AccumulatedUsage->OutputTokens += OutTokens;
+				AccumulatedUsage->CachedInputTokens += CachedTokens;
+			}
+
+			// Process choices delta
+			const TArray<TSharedPtr<FJsonValue>>* ChoicesArray = nullptr;
+			if (!EventJson->TryGetArrayField(TEXT("choices"), ChoicesArray) || ChoicesArray->Num() == 0) continue;
+
+			const TSharedPtr<FJsonObject>* ChoiceObj = nullptr;
+			if (!(*ChoicesArray)[0]->TryGetObject(ChoiceObj) || !ChoiceObj) continue;
+
+			// Finish reason
+			FString FinishReason;
+			if ((*ChoiceObj)->TryGetStringField(TEXT("finish_reason"), FinishReason) && !FinishReason.IsEmpty())
+			{
+				SSEState->FinishReason = FinishReason;
+			}
+
+			const TSharedPtr<FJsonObject>* DeltaObj = nullptr;
+			if (!(*ChoiceObj)->TryGetObjectField(TEXT("delta"), DeltaObj) || !DeltaObj) continue;
+
+			// Text content chunk
+			FString Content;
+			if ((*DeltaObj)->TryGetStringField(TEXT("content"), Content) && !Content.IsEmpty())
+			{
+				SSEState->ResponseText += Content;
+
+				// Emit immediately for real-time text display
+				if (OnProgress.IsBound())
+				{
+					FClaudeStreamEvent Event;
+					Event.Type = EClaudeStreamEventType::TextContent;
+					Event.Text = Content;
+					OnProgress.Execute(Event);
+				}
+			}
+
+			// Tool call deltas — accumulate by index
+			const TArray<TSharedPtr<FJsonValue>>* ToolCallsArray = nullptr;
+			if ((*DeltaObj)->TryGetArrayField(TEXT("tool_calls"), ToolCallsArray))
+			{
+				for (const TSharedPtr<FJsonValue>& TCValue : *ToolCallsArray)
+				{
+					const TSharedPtr<FJsonObject>* TCObj = nullptr;
+					if (!TCValue->TryGetObject(TCObj) || !TCObj) continue;
+
+					int32 ToolIndex = 0;
+					(*TCObj)->TryGetNumberField(TEXT("index"), ToolIndex);
+
+					FOpenAIPendingToolCall& PTC = SSEState->PendingToolCalls.FindOrAdd(ToolIndex);
+
+					FString Id;
+					if ((*TCObj)->TryGetStringField(TEXT("id"), Id) && !Id.IsEmpty())
+					{
+						PTC.Id = Id;
+					}
+
+					const TSharedPtr<FJsonObject>* FuncObj = nullptr;
+					if ((*TCObj)->TryGetObjectField(TEXT("function"), FuncObj) && FuncObj)
+					{
+						FString Name;
+						if ((*FuncObj)->TryGetStringField(TEXT("name"), Name) && !Name.IsEmpty())
+						{
+							PTC.Name = Name;
+						}
+						FString Args;
+						if ((*FuncObj)->TryGetStringField(TEXT("arguments"), Args))
+						{
+							PTC.Arguments += Args;
+						}
+					}
+				}
+			}
+		}
+	});
+
+	// Handle completion: execute tools and loop, or finalize
 	Request->OnProcessRequestComplete().BindLambda(
-		[this, OnComplete, OnProgress, AccumulatedUsage, AccumulatedText, ModelId, SessionId, ToolLoopCount]
+		[this, OnComplete, OnProgress, AccumulatedUsage, AccumulatedText, ModelId, SessionId, ToolLoopCount, SSEState]
 		(FHttpRequestPtr Req, FHttpResponsePtr Resp, bool bConnectedSuccessfully)
 	{
 		CurrentRequest.Reset();
@@ -183,12 +341,10 @@ void FOpenAIAPIBackend::SendRequest(
 		}
 
 		int32 ResponseCode = Resp->GetResponseCode();
-		FString ResponseBody = Resp->GetContentAsString();
-
 		if (ResponseCode != 200)
 		{
 			FString ErrorMsg = FString::Printf(TEXT("OpenAI API error (HTTP %d)"), ResponseCode);
-
+			FString ResponseBody = Resp->GetContentAsString();
 			TSharedPtr<FJsonObject> ErrorJson;
 			TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseBody);
 			if (FJsonSerializer::Deserialize(Reader, ErrorJson) && ErrorJson.IsValid())
@@ -203,7 +359,6 @@ void FOpenAIAPIBackend::SendRequest(
 					}
 				}
 			}
-
 			if (OnComplete.IsBound())
 			{
 				OnComplete.Execute(FLLMTurnResult::Error(ErrorMsg));
@@ -211,195 +366,154 @@ void FOpenAIAPIBackend::SendRequest(
 			return;
 		}
 
-		HandleResponse(ResponseBody, ModelId, SessionId, OnComplete, OnProgress,
-			AccumulatedUsage, AccumulatedText, ToolLoopCount);
+		if (!SSEState->bStreamComplete)
+		{
+			if (OnComplete.IsBound())
+			{
+				OnComplete.Execute(FLLMTurnResult::Error(TEXT("OpenAI API stream ended unexpectedly")));
+			}
+			return;
+		}
+
+		// Tool calls — execute and loop
+		if (SSEState->FinishReason == TEXT("tool_calls") && SSEState->PendingToolCalls.Num() > 0
+			&& ToolLoopCount < MaxToolLoopIterations)
+		{
+			// Sort by index and convert to FToolCall
+			TArray<int32> Indices;
+			SSEState->PendingToolCalls.GetKeys(Indices);
+			Indices.Sort();
+
+			TArray<FLLMToolCaller::FToolCall> ToolCalls;
+			for (int32 Idx : Indices)
+			{
+				const FOpenAIPendingToolCall& PTC = SSEState->PendingToolCalls[Idx];
+				FLLMToolCaller::FToolCall TC;
+				TC.Id = PTC.Id;
+				TC.Name = PTC.Name;
+				TC.InputJson = PTC.Arguments;
+				ToolCalls.Add(TC);
+
+				// Emit ToolUse event (full input now available)
+				if (OnProgress.IsBound())
+				{
+					FClaudeStreamEvent Event;
+					Event.Type = EClaudeStreamEventType::ToolUse;
+					Event.ToolName = TC.Name;
+					Event.ToolInput = TC.InputJson;
+					Event.ToolCallId = TC.Id;
+					OnProgress.Execute(Event);
+				}
+			}
+
+			// Execute tools (READ-ONLY only — enforced by GetToolsForOpenAI filter)
+			TArray<TPair<bool, FString>> Results;
+			for (const FLLMToolCaller::FToolCall& Call : ToolCalls)
+			{
+				UE_LOG(LogUnrealClaude, Log, TEXT("FOpenAIAPIBackend: Executing read-only tool '%s'"), *Call.Name);
+				TPair<bool, FString> Result = FLLMToolCaller::ExecuteToolCall(Call.Name, Call.InputJson);
+				Results.Add(Result);
+
+				if (OnProgress.IsBound())
+				{
+					FClaudeStreamEvent Event;
+					Event.Type = EClaudeStreamEventType::ToolResult;
+					Event.ToolCallId = Call.Id;
+					Event.ToolName = Call.Name;
+					Event.ToolResultContent = Result.Value;
+					Event.bIsError = !Result.Key;
+					OnProgress.Execute(Event);
+				}
+			}
+
+			// Build assistant message with tool_calls for session history
+			TSharedPtr<FJsonObject> AssistantMsg = MakeShared<FJsonObject>();
+			AssistantMsg->SetStringField(TEXT("role"), TEXT("assistant"));
+			if (!SSEState->ResponseText.IsEmpty())
+			{
+				AssistantMsg->SetStringField(TEXT("content"), SSEState->ResponseText);
+			}
+			else
+			{
+				AssistantMsg->SetField(TEXT("content"), MakeShared<FJsonValueNull>());
+			}
+
+			TArray<TSharedPtr<FJsonValue>> ToolCallsJson;
+			for (const FLLMToolCaller::FToolCall& TC : ToolCalls)
+			{
+				TSharedPtr<FJsonObject> TCObj = MakeShared<FJsonObject>();
+				TCObj->SetStringField(TEXT("id"), TC.Id);
+				TCObj->SetStringField(TEXT("type"), TEXT("function"));
+				TSharedPtr<FJsonObject> FuncObj = MakeShared<FJsonObject>();
+				FuncObj->SetStringField(TEXT("name"), TC.Name);
+				FuncObj->SetStringField(TEXT("arguments"), TC.InputJson);
+				TCObj->SetObjectField(TEXT("function"), FuncObj);
+				ToolCallsJson.Add(MakeShared<FJsonValueObject>(TCObj));
+			}
+			AssistantMsg->SetArrayField(TEXT("tool_calls"), ToolCallsJson);
+
+			// Append text to accumulated text if any
+			if (!SSEState->ResponseText.IsEmpty())
+			{
+				if (!AccumulatedText->IsEmpty()) *AccumulatedText += TEXT("\n");
+				*AccumulatedText += SSEState->ResponseText;
+			}
+
+			TSharedPtr<FLLMSessionState>* SessionPtr = Sessions.Find(SessionId);
+			if (SessionPtr && SessionPtr->IsValid())
+			{
+				(*SessionPtr)->AddRawJsonMessage(AssistantMsg);
+				TArray<TSharedPtr<FJsonObject>> ResultMsgs =
+					FLLMToolCaller::BuildOpenAIToolResultMessages(ToolCalls, Results);
+				for (const TSharedPtr<FJsonObject>& Msg : ResultMsgs)
+				{
+					(*SessionPtr)->AddRawJsonMessage(Msg);
+				}
+			}
+
+			SendRequest(SessionId, ModelId, OnComplete, OnProgress, AccumulatedUsage, AccumulatedText, ToolLoopCount + 1);
+			return;
+		}
+
+		// No tool calls — finalize
+		if (!SSEState->ResponseText.IsEmpty())
+		{
+			if (!AccumulatedText->IsEmpty()) *AccumulatedText += TEXT("\n");
+			*AccumulatedText += SSEState->ResponseText;
+		}
+
+		TSharedPtr<FLLMSessionState>* SessionPtr = Sessions.Find(SessionId);
+		if (SessionPtr && SessionPtr->IsValid())
+		{
+			(*SessionPtr)->AddAssistantMessage(*AccumulatedText);
+			(*SessionPtr)->ClearRawJsonMessages();
+		}
+
+		FLLMTurnResult Result = FLLMTurnResult::Success(*AccumulatedText, *AccumulatedUsage);
+
+		if (OnProgress.IsBound())
+		{
+			FClaudeStreamEvent ResultEvent;
+			ResultEvent.Type = EClaudeStreamEventType::Result;
+			ResultEvent.ResultText = *AccumulatedText;
+			ResultEvent.InputTokens = AccumulatedUsage->InputTokens;
+			ResultEvent.OutputTokens = AccumulatedUsage->OutputTokens;
+			ResultEvent.TotalCostUsd = AccumulatedUsage->EstimatedCostUsd;
+			ResultEvent.NumTurns = ToolLoopCount + 1;
+			OnProgress.Execute(ResultEvent);
+		}
+
+		if (OnComplete.IsBound())
+		{
+			OnComplete.Execute(Result);
+		}
 	});
 
 	CurrentRequest = Request;
 	Request->ProcessRequest();
 
-	UE_LOG(LogUnrealClaude, Log, TEXT("FOpenAIAPIBackend: Sending request (model: %s, loop: %d)"),
+	UE_LOG(LogUnrealClaude, Log, TEXT("FOpenAIAPIBackend: Sending SSE request (model: %s, loop: %d)"),
 		*ModelId, ToolLoopCount);
-}
-
-void FOpenAIAPIBackend::HandleResponse(
-	const FString& ResponseBody,
-	const FString& ModelId,
-	const FGuid& SessionId,
-	FOnLLMTurnComplete OnComplete,
-	FOnLLMStreamProgress OnProgress,
-	TSharedPtr<FLLMTokenUsage> AccumulatedUsage,
-	TSharedPtr<FString> AccumulatedText,
-	int32 ToolLoopCount)
-{
-	TSharedPtr<FJsonObject> Root;
-	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseBody);
-	if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
-	{
-		if (OnComplete.IsBound())
-		{
-			OnComplete.Execute(FLLMTurnResult::Error(TEXT("Failed to parse OpenAI API response")));
-		}
-		return;
-	}
-
-	// Accumulate token usage
-	const TSharedPtr<FJsonObject>* UsageObj = nullptr;
-	if (Root->TryGetObjectField(TEXT("usage"), UsageObj) && UsageObj)
-	{
-		int32 InTokens = 0, OutTokens = 0, CachedTokens = 0;
-		(*UsageObj)->TryGetNumberField(TEXT("prompt_tokens"), InTokens);
-		(*UsageObj)->TryGetNumberField(TEXT("completion_tokens"), OutTokens);
-		const TSharedPtr<FJsonObject>* PromptDetails = nullptr;
-		if ((*UsageObj)->TryGetObjectField(TEXT("prompt_tokens_details"), PromptDetails) && PromptDetails)
-		{
-			(*PromptDetails)->TryGetNumberField(TEXT("cached_tokens"), CachedTokens);
-		}
-		AccumulatedUsage->InputTokens += InTokens;
-		AccumulatedUsage->OutputTokens += OutTokens;
-		AccumulatedUsage->CachedInputTokens += CachedTokens;
-	}
-
-	// Extract text content
-	FString ResponseText;
-	const TArray<TSharedPtr<FJsonValue>>* ChoicesArray = nullptr;
-	if (Root->TryGetArrayField(TEXT("choices"), ChoicesArray) && ChoicesArray->Num() > 0)
-	{
-		const TSharedPtr<FJsonObject>* ChoiceObj = nullptr;
-		if ((*ChoicesArray)[0]->TryGetObject(ChoiceObj) && ChoiceObj)
-		{
-			const TSharedPtr<FJsonObject>* MessageObj = nullptr;
-			if ((*ChoiceObj)->TryGetObjectField(TEXT("message"), MessageObj) && MessageObj)
-			{
-				(*MessageObj)->TryGetStringField(TEXT("content"), ResponseText);
-			}
-
-			// Check finish_reason for tool_calls
-			FString FinishReason;
-			(*ChoiceObj)->TryGetStringField(TEXT("finish_reason"), FinishReason);
-
-			if (FinishReason == TEXT("tool_calls") && ToolLoopCount < MaxToolLoopIterations)
-			{
-				TArray<FLLMToolCaller::FToolCall> ToolCalls = FLLMToolCaller::ExtractOpenAIToolCalls(Root);
-
-				if (ToolCalls.Num() > 0)
-				{
-					// Emit text if any
-					if (!ResponseText.IsEmpty())
-					{
-						if (!AccumulatedText->IsEmpty()) *AccumulatedText += TEXT("\n");
-						*AccumulatedText += ResponseText;
-
-						if (OnProgress.IsBound())
-						{
-							FClaudeStreamEvent Event;
-							Event.Type = EClaudeStreamEventType::TextContent;
-							Event.Text = ResponseText;
-							OnProgress.Execute(Event);
-						}
-					}
-
-					// Emit tool use events
-					for (const FLLMToolCaller::FToolCall& Call : ToolCalls)
-					{
-						if (OnProgress.IsBound())
-						{
-							FClaudeStreamEvent Event;
-							Event.Type = EClaudeStreamEventType::ToolUse;
-							Event.ToolName = Call.Name;
-							Event.ToolInput = Call.InputJson;
-							Event.ToolCallId = Call.Id;
-							OnProgress.Execute(Event);
-						}
-					}
-
-					// Execute tools (READ-ONLY only — enforced by GetToolsForOpenAI filter)
-					TArray<TPair<bool, FString>> Results;
-					for (const FLLMToolCaller::FToolCall& Call : ToolCalls)
-					{
-						UE_LOG(LogUnrealClaude, Log, TEXT("FOpenAIAPIBackend: Executing read-only tool '%s'"), *Call.Name);
-						TPair<bool, FString> Result = FLLMToolCaller::ExecuteToolCall(Call.Name, Call.InputJson);
-						Results.Add(Result);
-
-						if (OnProgress.IsBound())
-						{
-							FClaudeStreamEvent Event;
-							Event.Type = EClaudeStreamEventType::ToolResult;
-							Event.ToolCallId = Call.Id;
-							Event.ToolName = Call.Name;
-							Event.ToolResultContent = Result.Value;
-							Event.bIsError = !Result.Key;
-							OnProgress.Execute(Event);
-						}
-					}
-
-					// Add tool exchange to session
-					TSharedPtr<FLLMSessionState>* SessionPtr = Sessions.Find(SessionId);
-					if (SessionPtr && SessionPtr->IsValid())
-					{
-						// Echo assistant message with tool_calls
-						(*SessionPtr)->AddRawJsonMessage(
-							FLLMToolCaller::BuildOpenAIAssistantToolMessage(ResponseText, Root));
-
-						// Add individual tool result messages
-						TArray<TSharedPtr<FJsonObject>> ResultMsgs =
-							FLLMToolCaller::BuildOpenAIToolResultMessages(ToolCalls, Results);
-						for (const TSharedPtr<FJsonObject>& Msg : ResultMsgs)
-						{
-							(*SessionPtr)->AddRawJsonMessage(Msg);
-						}
-					}
-
-					// Continue loop
-					SendRequest(SessionId, ModelId, OnComplete, OnProgress,
-						AccumulatedUsage, AccumulatedText, ToolLoopCount + 1);
-					return;
-				}
-			}
-		}
-	}
-
-	// No more tool calls — finalize
-	if (!ResponseText.IsEmpty())
-	{
-		if (!AccumulatedText->IsEmpty()) *AccumulatedText += TEXT("\n");
-		*AccumulatedText += ResponseText;
-
-		if (OnProgress.IsBound())
-		{
-			FClaudeStreamEvent Event;
-			Event.Type = EClaudeStreamEventType::TextContent;
-			Event.Text = ResponseText;
-			OnProgress.Execute(Event);
-		}
-	}
-
-	TSharedPtr<FLLMSessionState>* SessionPtr = Sessions.Find(SessionId);
-	if (SessionPtr && SessionPtr->IsValid())
-	{
-		(*SessionPtr)->AddAssistantMessage(*AccumulatedText);
-		(*SessionPtr)->ClearRawJsonMessages();
-	}
-
-	FLLMTurnResult Result = FLLMTurnResult::Success(*AccumulatedText, *AccumulatedUsage);
-
-	// Emit Result event so the UI can show stats footer (matching CLI behavior)
-	if (OnProgress.IsBound())
-	{
-		FClaudeStreamEvent ResultEvent;
-		ResultEvent.Type = EClaudeStreamEventType::Result;
-		ResultEvent.ResultText = *AccumulatedText;
-		ResultEvent.InputTokens = AccumulatedUsage->InputTokens;
-		ResultEvent.OutputTokens = AccumulatedUsage->OutputTokens;
-		ResultEvent.TotalCostUsd = AccumulatedUsage->EstimatedCostUsd;
-		ResultEvent.NumTurns = ToolLoopCount + 1;
-		OnProgress.Execute(ResultEvent);
-	}
-
-	if (OnComplete.IsBound())
-	{
-		OnComplete.Execute(Result);
-	}
 }
 
 void FOpenAIAPIBackend::Cancel()
@@ -490,6 +604,12 @@ FString FOpenAIAPIBackend::BuildRequestBody(FLLMSessionState& Session, const FSt
 
 	Root->SetStringField(TEXT("model"), ModelId);
 	Root->SetNumberField(TEXT("max_completion_tokens"), MaxTokens);
+	Root->SetBoolField(TEXT("stream"), true);
+
+	// Request token usage in the final stream chunk
+	TSharedPtr<FJsonObject> StreamOptions = MakeShared<FJsonObject>();
+	StreamOptions->SetBoolField(TEXT("include_usage"), true);
+	Root->SetObjectField(TEXT("stream_options"), StreamOptions);
 
 	// Tools — READ-ONLY only for OpenAI
 	TArray<TSharedPtr<FJsonValue>> ToolDefs = FLLMToolCaller::GetToolsForOpenAI(EToolFilter::ReadOnly);
@@ -571,7 +691,7 @@ FString FOpenAIAPIBackend::BuildRequestBody(FLLMSessionState& Session, const FSt
 }
 
 // ============================================================================
-// Response Parsing
+// Response Parsing (legacy — kept for compatibility)
 // ============================================================================
 
 FLLMTurnResult FOpenAIAPIBackend::ParseResponse(const FString& ResponseBody, const FString& ModelId) const

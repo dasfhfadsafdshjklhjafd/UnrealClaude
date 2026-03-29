@@ -144,6 +144,35 @@ bool FAnthropicAPIBackend::SubmitTurn(
 	return true;
 }
 
+// ============================================================================
+// SSE Streaming
+// ============================================================================
+
+namespace
+{
+	/** Per-request SSE parse state, shared between OnRequestProgress and OnProcessRequestComplete */
+	struct FAnthropicSSEState
+	{
+		FString LineBuffer;
+		int32 BytesProcessed = 0;
+
+		// Current content block being streamed
+		FString CurrentBlockType;   // "text" or "tool_use"
+		FString CurrentBlockId;
+		FString CurrentBlockName;
+		FString CurrentBlockText;   // accumulated text_delta chunks
+		FString CurrentBlockInput;  // accumulated input_json_delta chunks
+
+		// Completed content for building the assistant tool message
+		TArray<TSharedPtr<FJsonValue>> ContentBlocks;
+		TArray<FLLMToolCaller::FToolCall> CompletedToolCalls;
+
+		// Stream end state (set by message_delta / message_stop)
+		FString StopReason;
+		bool bStreamComplete = false;
+	};
+}
+
 void FAnthropicAPIBackend::SendRequest(
 	const FGuid& SessionId,
 	const FString& ModelId,
@@ -174,8 +203,186 @@ void FAnthropicAPIBackend::SendRequest(
 	Request->SetHeader(TEXT("anthropic-version"), APIVersion);
 	Request->SetContentAsString(RequestBody);
 
+	TSharedPtr<FAnthropicSSEState> SSEState = MakeShared<FAnthropicSSEState>();
+
+	// Parse SSE chunks as they arrive and emit stream events
+	Request->OnRequestProgress64().BindLambda(
+		[this, OnProgress, AccumulatedUsage, AccumulatedText, SSEState]
+		(FHttpRequestPtr Req, uint64 /*BytesSent*/, uint64 /*BytesReceived*/)
+	{
+		if (!Req->GetResponse().IsValid()) return;
+
+		FString FullContent = Req->GetResponse()->GetContentAsString();
+		if (FullContent.Len() <= SSEState->BytesProcessed) return;
+
+		SSEState->LineBuffer += FullContent.Mid(SSEState->BytesProcessed);
+		SSEState->BytesProcessed = FullContent.Len();
+
+		// Process all complete lines from the buffer
+		int32 NewlineIdx;
+		while (SSEState->LineBuffer.FindChar(TEXT('\n'), NewlineIdx))
+		{
+			FString Line = SSEState->LineBuffer.Left(NewlineIdx).TrimEnd();
+			SSEState->LineBuffer = SSEState->LineBuffer.Mid(NewlineIdx + 1);
+
+			// SSE lines are "data: {json}" — skip blank lines and non-data lines
+			if (Line.IsEmpty() || !Line.StartsWith(TEXT("data:"))) continue;
+
+			FString Data = Line.Mid(5).TrimStart();
+
+			TSharedPtr<FJsonObject> EventJson;
+			TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Data);
+			if (!FJsonSerializer::Deserialize(Reader, EventJson) || !EventJson.IsValid()) continue;
+
+			FString EventType;
+			EventJson->TryGetStringField(TEXT("type"), EventType);
+
+			if (EventType == TEXT("message_start"))
+			{
+				// Extract input token count from initial usage
+				const TSharedPtr<FJsonObject>* MsgObj = nullptr;
+				if (EventJson->TryGetObjectField(TEXT("message"), MsgObj) && MsgObj)
+				{
+					const TSharedPtr<FJsonObject>* UsageObj = nullptr;
+					if ((*MsgObj)->TryGetObjectField(TEXT("usage"), UsageObj) && UsageObj)
+					{
+						int32 InTokens = 0;
+						(*UsageObj)->TryGetNumberField(TEXT("input_tokens"), InTokens);
+						AccumulatedUsage->InputTokens += InTokens;
+					}
+				}
+			}
+			else if (EventType == TEXT("content_block_start"))
+			{
+				// Reset current block state
+				SSEState->CurrentBlockType.Empty();
+				SSEState->CurrentBlockId.Empty();
+				SSEState->CurrentBlockName.Empty();
+				SSEState->CurrentBlockText.Empty();
+				SSEState->CurrentBlockInput.Empty();
+
+				const TSharedPtr<FJsonObject>* BlockObj = nullptr;
+				if (EventJson->TryGetObjectField(TEXT("content_block"), BlockObj) && BlockObj)
+				{
+					(*BlockObj)->TryGetStringField(TEXT("type"), SSEState->CurrentBlockType);
+					(*BlockObj)->TryGetStringField(TEXT("id"), SSEState->CurrentBlockId);
+					(*BlockObj)->TryGetStringField(TEXT("name"), SSEState->CurrentBlockName);
+				}
+			}
+			else if (EventType == TEXT("content_block_delta"))
+			{
+				const TSharedPtr<FJsonObject>* DeltaObj = nullptr;
+				if (EventJson->TryGetObjectField(TEXT("delta"), DeltaObj) && DeltaObj)
+				{
+					FString DeltaType;
+					(*DeltaObj)->TryGetStringField(TEXT("type"), DeltaType);
+
+					if (DeltaType == TEXT("text_delta"))
+					{
+						FString Text;
+						(*DeltaObj)->TryGetStringField(TEXT("text"), Text);
+						if (!Text.IsEmpty())
+						{
+							SSEState->CurrentBlockText += Text;
+							*AccumulatedText += Text;
+
+							// Emit immediately for real-time text display
+							if (OnProgress.IsBound())
+							{
+								FClaudeStreamEvent Event;
+								Event.Type = EClaudeStreamEventType::TextContent;
+								Event.Text = Text;
+								OnProgress.Execute(Event);
+							}
+						}
+					}
+					else if (DeltaType == TEXT("input_json_delta"))
+					{
+						FString PartialJson;
+						(*DeltaObj)->TryGetStringField(TEXT("partial_json"), PartialJson);
+						SSEState->CurrentBlockInput += PartialJson;
+					}
+				}
+			}
+			else if (EventType == TEXT("content_block_stop"))
+			{
+				if (SSEState->CurrentBlockType == TEXT("text"))
+				{
+					// Build text content block for assistant message
+					TSharedPtr<FJsonObject> TextBlock = MakeShared<FJsonObject>();
+					TextBlock->SetStringField(TEXT("type"), TEXT("text"));
+					TextBlock->SetStringField(TEXT("text"), SSEState->CurrentBlockText);
+					SSEState->ContentBlocks.Add(MakeShared<FJsonValueObject>(TextBlock));
+				}
+				else if (SSEState->CurrentBlockType == TEXT("tool_use"))
+				{
+					// Parse accumulated input JSON
+					TSharedPtr<FJsonObject> InputObj = MakeShared<FJsonObject>();
+					if (!SSEState->CurrentBlockInput.IsEmpty())
+					{
+						TSharedRef<TJsonReader<>> InputReader = TJsonReaderFactory<>::Create(SSEState->CurrentBlockInput);
+						TSharedPtr<FJsonObject> ParsedInput;
+						if (FJsonSerializer::Deserialize(InputReader, ParsedInput) && ParsedInput.IsValid())
+						{
+							InputObj = ParsedInput;
+						}
+					}
+
+					// Build tool_use content block for assistant message echo
+					TSharedPtr<FJsonObject> ToolBlock = MakeShared<FJsonObject>();
+					ToolBlock->SetStringField(TEXT("type"), TEXT("tool_use"));
+					ToolBlock->SetStringField(TEXT("id"), SSEState->CurrentBlockId);
+					ToolBlock->SetStringField(TEXT("name"), SSEState->CurrentBlockName);
+					ToolBlock->SetObjectField(TEXT("input"), InputObj);
+					SSEState->ContentBlocks.Add(MakeShared<FJsonValueObject>(ToolBlock));
+
+					// Record completed tool call
+					FLLMToolCaller::FToolCall ToolCall;
+					ToolCall.Id = SSEState->CurrentBlockId;
+					ToolCall.Name = SSEState->CurrentBlockName;
+					ToolCall.InputJson = SSEState->CurrentBlockInput;
+					SSEState->CompletedToolCalls.Add(ToolCall);
+
+					// Emit ToolUse event — full input now available
+					if (OnProgress.IsBound())
+					{
+						FClaudeStreamEvent Event;
+						Event.Type = EClaudeStreamEventType::ToolUse;
+						Event.ToolName = ToolCall.Name;
+						Event.ToolInput = ToolCall.InputJson;
+						Event.ToolCallId = ToolCall.Id;
+						OnProgress.Execute(Event);
+					}
+				}
+			}
+			else if (EventType == TEXT("message_delta"))
+			{
+				// Stop reason and output token count
+				const TSharedPtr<FJsonObject>* DeltaObj = nullptr;
+				if (EventJson->TryGetObjectField(TEXT("delta"), DeltaObj) && DeltaObj)
+				{
+					(*DeltaObj)->TryGetStringField(TEXT("stop_reason"), SSEState->StopReason);
+				}
+				const TSharedPtr<FJsonObject>* UsageObj = nullptr;
+				if (EventJson->TryGetObjectField(TEXT("usage"), UsageObj) && UsageObj)
+				{
+					int32 OutTokens = 0, CachedTokens = 0;
+					(*UsageObj)->TryGetNumberField(TEXT("output_tokens"), OutTokens);
+					(*UsageObj)->TryGetNumberField(TEXT("cache_read_input_tokens"), CachedTokens);
+					AccumulatedUsage->OutputTokens += OutTokens;
+					AccumulatedUsage->CachedInputTokens += CachedTokens;
+				}
+			}
+			else if (EventType == TEXT("message_stop"))
+			{
+				SSEState->bStreamComplete = true;
+			}
+		}
+	});
+
+	// Handle completion: execute tools and loop, or finalize
 	Request->OnProcessRequestComplete().BindLambda(
-		[this, OnComplete, OnProgress, AccumulatedUsage, AccumulatedText, ModelId, SessionId, ToolLoopCount]
+		[this, OnComplete, OnProgress, AccumulatedUsage, AccumulatedText, ModelId, SessionId, ToolLoopCount, SSEState]
 		(FHttpRequestPtr Req, FHttpResponsePtr Resp, bool bConnectedSuccessfully)
 	{
 		CurrentRequest.Reset();
@@ -190,12 +397,10 @@ void FAnthropicAPIBackend::SendRequest(
 		}
 
 		int32 ResponseCode = Resp->GetResponseCode();
-		FString ResponseBody = Resp->GetContentAsString();
-
 		if (ResponseCode != 200)
 		{
 			FString ErrorMsg = FString::Printf(TEXT("Anthropic API error (HTTP %d)"), ResponseCode);
-
+			FString ResponseBody = Resp->GetContentAsString();
 			TSharedPtr<FJsonObject> ErrorJson;
 			TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseBody);
 			if (FJsonSerializer::Deserialize(Reader, ErrorJson) && ErrorJson.IsValid())
@@ -210,7 +415,6 @@ void FAnthropicAPIBackend::SendRequest(
 					}
 				}
 			}
-
 			if (OnComplete.IsBound())
 			{
 				OnComplete.Execute(FLLMTurnResult::Error(ErrorMsg));
@@ -218,187 +422,85 @@ void FAnthropicAPIBackend::SendRequest(
 			return;
 		}
 
-		HandleResponse(ResponseBody, ModelId, SessionId, OnComplete, OnProgress,
-			AccumulatedUsage, AccumulatedText, ToolLoopCount);
+		if (!SSEState->bStreamComplete)
+		{
+			if (OnComplete.IsBound())
+			{
+				OnComplete.Execute(FLLMTurnResult::Error(TEXT("Anthropic API stream ended unexpectedly")));
+			}
+			return;
+		}
+
+		// Tool calls — execute and loop
+		if (SSEState->StopReason == TEXT("tool_use") && SSEState->CompletedToolCalls.Num() > 0
+			&& ToolLoopCount < MaxToolLoopIterations)
+		{
+			TArray<TPair<bool, FString>> Results;
+			for (const FLLMToolCaller::FToolCall& Call : SSEState->CompletedToolCalls)
+			{
+				UE_LOG(LogUnrealClaude, Log, TEXT("FAnthropicAPIBackend: Executing tool '%s' (id: %s)"),
+					*Call.Name, *Call.Id);
+				TPair<bool, FString> Result = FLLMToolCaller::ExecuteToolCall(Call.Name, Call.InputJson);
+				Results.Add(Result);
+
+				if (OnProgress.IsBound())
+				{
+					FClaudeStreamEvent Event;
+					Event.Type = EClaudeStreamEventType::ToolResult;
+					Event.ToolCallId = Call.Id;
+					Event.ToolName = Call.Name;
+					Event.ToolResultContent = Result.Value;
+					Event.bIsError = !Result.Key;
+					OnProgress.Execute(Event);
+				}
+			}
+
+			TSharedPtr<FLLMSessionState>* SessionPtr = Sessions.Find(SessionId);
+			if (SessionPtr && SessionPtr->IsValid())
+			{
+				(*SessionPtr)->AddRawJsonMessage(
+					FLLMToolCaller::BuildAnthropicAssistantToolMessage(SSEState->ContentBlocks));
+				(*SessionPtr)->AddRawJsonMessage(
+					FLLMToolCaller::BuildAnthropicToolResultMessage(SSEState->CompletedToolCalls, Results));
+			}
+
+			SendRequest(SessionId, ModelId, OnComplete, OnProgress, AccumulatedUsage, AccumulatedText, ToolLoopCount + 1);
+			return;
+		}
+
+		// No tool calls — finalize
+		TSharedPtr<FLLMSessionState>* SessionPtr = Sessions.Find(SessionId);
+		if (SessionPtr && SessionPtr->IsValid())
+		{
+			(*SessionPtr)->AddAssistantMessage(*AccumulatedText);
+			(*SessionPtr)->ClearRawJsonMessages();
+		}
+
+		FLLMTurnResult Result = FLLMTurnResult::Success(*AccumulatedText, *AccumulatedUsage);
+
+		if (OnProgress.IsBound())
+		{
+			FClaudeStreamEvent ResultEvent;
+			ResultEvent.Type = EClaudeStreamEventType::Result;
+			ResultEvent.ResultText = *AccumulatedText;
+			ResultEvent.InputTokens = AccumulatedUsage->InputTokens;
+			ResultEvent.OutputTokens = AccumulatedUsage->OutputTokens;
+			ResultEvent.TotalCostUsd = AccumulatedUsage->EstimatedCostUsd;
+			ResultEvent.NumTurns = ToolLoopCount + 1;
+			OnProgress.Execute(ResultEvent);
+		}
+
+		if (OnComplete.IsBound())
+		{
+			OnComplete.Execute(Result);
+		}
 	});
 
 	CurrentRequest = Request;
 	Request->ProcessRequest();
 
-	UE_LOG(LogUnrealClaude, Log, TEXT("FAnthropicAPIBackend: Sending request (model: %s, loop: %d)"),
+	UE_LOG(LogUnrealClaude, Log, TEXT("FAnthropicAPIBackend: Sending SSE request (model: %s, loop: %d)"),
 		*ModelId, ToolLoopCount);
-}
-
-void FAnthropicAPIBackend::HandleResponse(
-	const FString& ResponseBody,
-	const FString& ModelId,
-	const FGuid& SessionId,
-	FOnLLMTurnComplete OnComplete,
-	FOnLLMStreamProgress OnProgress,
-	TSharedPtr<FLLMTokenUsage> AccumulatedUsage,
-	TSharedPtr<FString> AccumulatedText,
-	int32 ToolLoopCount)
-{
-	TSharedPtr<FJsonObject> Root;
-	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseBody);
-	if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
-	{
-		if (OnComplete.IsBound())
-		{
-			OnComplete.Execute(FLLMTurnResult::Error(TEXT("Failed to parse Anthropic API response")));
-		}
-		return;
-	}
-
-	// Accumulate token usage
-	const TSharedPtr<FJsonObject>* UsageObj = nullptr;
-	if (Root->TryGetObjectField(TEXT("usage"), UsageObj) && UsageObj)
-	{
-		int32 InTokens = 0, OutTokens = 0, CachedTokens = 0;
-		(*UsageObj)->TryGetNumberField(TEXT("input_tokens"), InTokens);
-		(*UsageObj)->TryGetNumberField(TEXT("output_tokens"), OutTokens);
-		(*UsageObj)->TryGetNumberField(TEXT("cache_read_input_tokens"), CachedTokens);
-		AccumulatedUsage->InputTokens += InTokens;
-		AccumulatedUsage->OutputTokens += OutTokens;
-		AccumulatedUsage->CachedInputTokens += CachedTokens;
-	}
-
-	// Extract text content from this response
-	FString ResponseText;
-	const TArray<TSharedPtr<FJsonValue>>* ContentArray = nullptr;
-	if (Root->TryGetArrayField(TEXT("content"), ContentArray))
-	{
-		for (const TSharedPtr<FJsonValue>& ContentValue : *ContentArray)
-		{
-			const TSharedPtr<FJsonObject>* ContentObj = nullptr;
-			if (ContentValue->TryGetObject(ContentObj) && ContentObj)
-			{
-				FString Type;
-				if ((*ContentObj)->TryGetStringField(TEXT("type"), Type) && Type == TEXT("text"))
-				{
-					FString Text;
-					if ((*ContentObj)->TryGetStringField(TEXT("text"), Text))
-					{
-						if (!AccumulatedText->IsEmpty())
-						{
-							*AccumulatedText += TEXT("\n");
-						}
-						*AccumulatedText += Text;
-
-						// Emit stream event for UI
-						if (OnProgress.IsBound())
-						{
-							FClaudeStreamEvent Event;
-							Event.Type = EClaudeStreamEventType::TextContent;
-							Event.Text = Text;
-							OnProgress.Execute(Event);
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// Check if the model wants to call tools
-	if (FLLMToolCaller::AnthropicResponseHasToolUse(Root))
-	{
-		if (ToolLoopCount >= MaxToolLoopIterations)
-		{
-			UE_LOG(LogUnrealClaude, Warning, TEXT("FAnthropicAPIBackend: Tool loop limit reached (%d)"), MaxToolLoopIterations);
-			// Fall through to return what we have
-		}
-		else
-		{
-			TArray<FLLMToolCaller::FToolCall> ToolCalls = FLLMToolCaller::ExtractAnthropicToolCalls(Root);
-
-			if (ToolCalls.Num() > 0)
-			{
-				// Emit tool use events for UI
-				for (const FLLMToolCaller::FToolCall& Call : ToolCalls)
-				{
-					if (OnProgress.IsBound())
-					{
-						FClaudeStreamEvent Event;
-						Event.Type = EClaudeStreamEventType::ToolUse;
-						Event.ToolName = Call.Name;
-						Event.ToolInput = Call.InputJson;
-						Event.ToolCallId = Call.Id;
-						OnProgress.Execute(Event);
-					}
-				}
-
-				// Execute all tool calls
-				TArray<TPair<bool, FString>> Results;
-				for (const FLLMToolCaller::FToolCall& Call : ToolCalls)
-				{
-					UE_LOG(LogUnrealClaude, Log, TEXT("FAnthropicAPIBackend: Executing tool '%s' (id: %s)"),
-						*Call.Name, *Call.Id);
-
-					TPair<bool, FString> Result = FLLMToolCaller::ExecuteToolCall(Call.Name, Call.InputJson);
-					Results.Add(Result);
-
-					// Emit tool result event for UI
-					if (OnProgress.IsBound())
-					{
-						FClaudeStreamEvent Event;
-						Event.Type = EClaudeStreamEventType::ToolResult;
-						Event.ToolCallId = Call.Id;
-						Event.ToolName = Call.Name;
-						Event.ToolResultContent = Result.Value;
-						Event.bIsError = !Result.Key;
-						OnProgress.Execute(Event);
-					}
-				}
-
-				// Add tool exchange to session for the next request
-				TSharedPtr<FLLMSessionState>* SessionPtr = Sessions.Find(SessionId);
-				if (SessionPtr && SessionPtr->IsValid())
-				{
-					// Echo assistant response with tool_use blocks
-					(*SessionPtr)->AddRawJsonMessage(
-						FLLMToolCaller::BuildAnthropicAssistantToolMessage(*ContentArray));
-
-					// Add tool results as user message
-					(*SessionPtr)->AddRawJsonMessage(
-						FLLMToolCaller::BuildAnthropicToolResultMessage(ToolCalls, Results));
-				}
-
-				// Continue the loop — send another request
-				SendRequest(SessionId, ModelId, OnComplete, OnProgress,
-					AccumulatedUsage, AccumulatedText, ToolLoopCount + 1);
-				return;
-			}
-		}
-	}
-
-	// No more tool calls — finalize the turn
-	TSharedPtr<FLLMSessionState>* SessionPtr = Sessions.Find(SessionId);
-	if (SessionPtr && SessionPtr->IsValid())
-	{
-		(*SessionPtr)->AddAssistantMessage(*AccumulatedText);
-		// Clear any leftover raw messages
-		(*SessionPtr)->ClearRawJsonMessages();
-	}
-
-	FLLMTurnResult Result = FLLMTurnResult::Success(*AccumulatedText, *AccumulatedUsage);
-
-	// Emit Result event so the UI can show stats footer (matching CLI behavior)
-	if (OnProgress.IsBound())
-	{
-		FClaudeStreamEvent ResultEvent;
-		ResultEvent.Type = EClaudeStreamEventType::Result;
-		ResultEvent.ResultText = *AccumulatedText;
-		ResultEvent.InputTokens = AccumulatedUsage->InputTokens;
-		ResultEvent.OutputTokens = AccumulatedUsage->OutputTokens;
-		ResultEvent.TotalCostUsd = AccumulatedUsage->EstimatedCostUsd;
-		ResultEvent.NumTurns = ToolLoopCount + 1;
-		OnProgress.Execute(ResultEvent);
-	}
-
-	if (OnComplete.IsBound())
-	{
-		OnComplete.Execute(Result);
-	}
 }
 
 void FAnthropicAPIBackend::Cancel()
@@ -473,6 +575,7 @@ FString FAnthropicAPIBackend::BuildRequestBody(FLLMSessionState& Session, const 
 
 	Root->SetStringField(TEXT("model"), ModelId);
 	Root->SetNumberField(TEXT("max_tokens"), MaxTokens);
+	Root->SetBoolField(TEXT("stream"), true);
 
 	// System prompt
 	FString FullSystemPrompt = Session.GetFullSystemPrompt();
@@ -552,12 +655,11 @@ FString FAnthropicAPIBackend::BuildRequestBody(FLLMSessionState& Session, const 
 }
 
 // ============================================================================
-// Response Parsing
+// Response Parsing (legacy — kept for compatibility)
 // ============================================================================
 
 FLLMTurnResult FAnthropicAPIBackend::ParseResponse(const FString& ResponseBody, const FString& ModelId) const
 {
-	// Legacy path — kept for compatibility but HandleResponse is the primary path now
 	TSharedPtr<FJsonObject> Root;
 	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseBody);
 
@@ -602,93 +704,4 @@ FLLMTurnResult FAnthropicAPIBackend::ParseResponse(const FString& ResponseBody, 
 	}
 
 	return FLLMTurnResult::Success(ResponseText, Usage);
-}
-
-void FAnthropicAPIBackend::ProcessSSEChunk(
-	const FString& Chunk,
-	const FString& ModelId,
-	FOnLLMStreamProgress OnProgress,
-	TSharedPtr<FLLMTokenUsage> AccumulatedUsage,
-	TSharedPtr<FString> AccumulatedText) const
-{
-	// SSE format: "event: <type>\ndata: <json>\n\n"
-	// This is called for future streaming support
-	// For now, we use non-streaming requests
-
-	// Parse SSE lines
-	TArray<FString> Lines;
-	Chunk.ParseIntoArrayLines(Lines);
-
-	FString EventType;
-	for (const FString& Line : Lines)
-	{
-		if (Line.StartsWith(TEXT("event: ")))
-		{
-			EventType = Line.Mid(7).TrimStartAndEnd();
-		}
-		else if (Line.StartsWith(TEXT("data: ")))
-		{
-			FString Data = Line.Mid(6);
-
-			if (EventType == TEXT("content_block_delta"))
-			{
-				TSharedPtr<FJsonObject> DeltaJson;
-				TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Data);
-				if (FJsonSerializer::Deserialize(Reader, DeltaJson) && DeltaJson.IsValid())
-				{
-					const TSharedPtr<FJsonObject>* Delta = nullptr;
-					if (DeltaJson->TryGetObjectField(TEXT("delta"), Delta) && Delta)
-					{
-						FString Text;
-						if ((*Delta)->TryGetStringField(TEXT("text"), Text))
-						{
-							*AccumulatedText += Text;
-
-							// Emit stream event
-							if (OnProgress.IsBound())
-							{
-								FClaudeStreamEvent Event;
-								Event.Type = EClaudeStreamEventType::TextContent;
-								Event.Text = Text;
-								OnProgress.Execute(Event);
-							}
-						}
-					}
-				}
-			}
-			else if (EventType == TEXT("message_delta"))
-			{
-				TSharedPtr<FJsonObject> DeltaJson;
-				TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Data);
-				if (FJsonSerializer::Deserialize(Reader, DeltaJson) && DeltaJson.IsValid())
-				{
-					const TSharedPtr<FJsonObject>* UsageObj = nullptr;
-					if (DeltaJson->TryGetObjectField(TEXT("usage"), UsageObj) && UsageObj)
-					{
-						(*UsageObj)->TryGetNumberField(TEXT("output_tokens"), AccumulatedUsage->OutputTokens);
-					}
-				}
-			}
-			else if (EventType == TEXT("message_start"))
-			{
-				TSharedPtr<FJsonObject> StartJson;
-				TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Data);
-				if (FJsonSerializer::Deserialize(Reader, StartJson) && StartJson.IsValid())
-				{
-					const TSharedPtr<FJsonObject>* MessageObj = nullptr;
-					if (StartJson->TryGetObjectField(TEXT("message"), MessageObj) && MessageObj)
-					{
-						const TSharedPtr<FJsonObject>* UsageObj = nullptr;
-						if ((*MessageObj)->TryGetObjectField(TEXT("usage"), UsageObj) && UsageObj)
-						{
-							(*UsageObj)->TryGetNumberField(TEXT("input_tokens"), AccumulatedUsage->InputTokens);
-							(*UsageObj)->TryGetNumberField(TEXT("cache_read_input_tokens"), AccumulatedUsage->CachedInputTokens);
-						}
-					}
-				}
-			}
-
-			EventType.Empty();
-		}
-	}
 }

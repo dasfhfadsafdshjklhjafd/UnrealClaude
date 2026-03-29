@@ -351,10 +351,16 @@ void SClaudeToolbar::Construct(const FArguments& InArgs)
 						OnSendRoleChanged.ExecuteIfBound(NewRole);
 						return FReply::Handled();
 					})
+					.ForegroundColor_Lambda([this]() -> FSlateColor
+					{
+						return ActiveSendRole.Get() == EModelRole::Critic
+							? FSlateColor(FLinearColor(1.0f, 0.42f, 0.05f))
+							: FSlateColor::UseForeground();
+					})
 					.ButtonColorAndOpacity_Lambda([this]()
 					{
 						return ActiveSendRole.Get() == EModelRole::Critic
-							? FLinearColor(0.85f, 0.42f, 0.08f)
+							? FLinearColor(0.28f, 0.1f, 0.02f)
 							: FLinearColor(0.15f, 0.15f, 0.17f);
 					})
 					.ToolTipText(LOCTEXT("CriticTip", "Toggle Critic mode — stays active for all sends until toggled off"))
@@ -372,10 +378,16 @@ void SClaudeToolbar::Construct(const FArguments& InArgs)
 						OnSendRoleChanged.ExecuteIfBound(NewRole);
 						return FReply::Handled();
 					})
+					.ForegroundColor_Lambda([this]() -> FSlateColor
+					{
+						return ActiveSendRole.Get() == EModelRole::Architect
+							? FSlateColor(FLinearColor(1.0f, 0.42f, 0.05f))
+							: FSlateColor::UseForeground();
+					})
 					.ButtonColorAndOpacity_Lambda([this]()
 					{
 						return ActiveSendRole.Get() == EModelRole::Architect
-							? FLinearColor(0.85f, 0.42f, 0.08f)
+							? FLinearColor(0.28f, 0.1f, 0.02f)
 							: FLinearColor(0.15f, 0.15f, 0.17f);
 					})
 					.ToolTipText(LOCTEXT("ArchitectTip", "Toggle Architect mode — stays active for all sends until toggled off"))
@@ -393,10 +405,16 @@ void SClaudeToolbar::Construct(const FArguments& InArgs)
 						OnSendRoleChanged.ExecuteIfBound(NewRole);
 						return FReply::Handled();
 					})
+					.ForegroundColor_Lambda([this]() -> FSlateColor
+					{
+						return ActiveSendRole.Get() == EModelRole::Escalation
+							? FSlateColor(FLinearColor(1.0f, 0.42f, 0.05f))
+							: FSlateColor::UseForeground();
+					})
 					.ButtonColorAndOpacity_Lambda([this]()
 					{
 						return ActiveSendRole.Get() == EModelRole::Escalation
-							? FLinearColor(0.85f, 0.42f, 0.08f)
+							? FLinearColor(0.28f, 0.1f, 0.02f)
 							: FLinearColor(0.15f, 0.15f, 0.17f);
 					})
 					.ToolTipText(LOCTEXT("EscalateTip", "Toggle Escalation mode — uses a stronger model for all sends until toggled off"))
@@ -414,10 +432,16 @@ void SClaudeToolbar::Construct(const FArguments& InArgs)
 						OnSendRoleChanged.ExecuteIfBound(NewRole);
 						return FReply::Handled();
 					})
+					.ForegroundColor_Lambda([this]() -> FSlateColor
+					{
+						return ActiveSendRole.Get() == EModelRole::DocsAgent
+							? FSlateColor(FLinearColor(1.0f, 0.42f, 0.05f))
+							: FSlateColor::UseForeground();
+					})
 					.ButtonColorAndOpacity_Lambda([this]()
 					{
 						return ActiveSendRole.Get() == EModelRole::DocsAgent
-							? FLinearColor(0.85f, 0.42f, 0.08f)
+							? FLinearColor(0.28f, 0.1f, 0.02f)
 							: FLinearColor(0.15f, 0.15f, 0.17f);
 					})
 					.ToolTipText(LOCTEXT("DocsTip", "Toggle DocsAgent mode — routes all sends to DocsAgent until toggled off"))

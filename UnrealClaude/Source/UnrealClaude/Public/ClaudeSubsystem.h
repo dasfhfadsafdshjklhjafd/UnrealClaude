@@ -191,14 +191,24 @@ private:
 	FString CustomSystemPrompt;
 	FString SelectedModel = TEXT("claude-sonnet-4-6");
 
+	/** Build the full system prompt for a new API session */
+	FString BuildAPISystemPrompt(const FClaudePromptOptions& Options) const;
+
+	/** Destroy and invalidate the session for a specific role (if it exists) */
+	void DestroyRoleSession(EModelRole Role);
+
 	// ---- Multi-Backend Members ----
 	TUniquePtr<FLLMBackendRegistry> BackendRegistry;
 	TUniquePtr<FLLMRoleManager> RoleManager;
 	TUniquePtr<FLLMTokenTracker> TokenTracker;
 	TUniquePtr<FLLMPricingConfig> PricingConfig;
-	FString ActiveBackendId = TEXT("claude-code");
-	FLLMSessionHandle ActiveSession;
 
-	/** Number of SessionManager entries already synced into ActiveSession via SeedHistory */
-	int32 ActiveSessionSyncedHistoryCount = 0;
+	/** Backend used for Worker sends — other roles use their own assignment's ProviderId */
+	FString ActiveBackendId = TEXT("claude-code");
+
+	/** Per-role API sessions — each role keeps its own session so role invocations never
+	 *  destroy the Worker's live conversation context. */
+	TMap<EModelRole, FLLMSessionHandle> RoleSessions;
+	TMap<EModelRole, int32>             RoleSessionSyncedHistoryCounts;
+	TMap<EModelRole, FString>           RoleSessionBackendIds;
 };

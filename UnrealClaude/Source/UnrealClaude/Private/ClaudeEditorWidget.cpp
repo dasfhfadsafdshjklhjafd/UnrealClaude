@@ -630,15 +630,9 @@ void SClaudeEditorWidget::SendMessage()
 		// Store only the original user message in history, not the role-augmented prompt
 		Options.HistoryPrompt = Prompt;
 
-		// Temporarily switch to the role's backend
-		FLLMRoleManager& RoleMgr = FClaudeCodeSubsystem::Get().GetRoleManager();
-		FModelRoleAssignment RoleAssignment = RoleMgr.GetAssignment(SelectedSendRole);
-		FString PreviousBackend = FClaudeCodeSubsystem::Get().GetActiveBackendId();
-		FClaudeCodeSubsystem::Get().SetActiveBackendId(RoleAssignment.ProviderId);
+		// SendPromptViaBackend resolves the correct backend per role internally —
+		// no need to temporarily switch ActiveBackendId here.
 		FClaudeCodeSubsystem::Get().SendPromptViaBackend(AugmentedPrompt, OnTurnComplete, Options, SelectedSendRole);
-
-		// Restore previous backend after send (the async callback handles completion)
-		FClaudeCodeSubsystem::Get().SetActiveBackendId(PreviousBackend);
 	}
 	else
 	{

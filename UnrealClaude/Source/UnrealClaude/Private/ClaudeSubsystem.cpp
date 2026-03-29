@@ -341,8 +341,53 @@ void FClaudeCodeSubsystem::ClearHistory()
 	if (SessionManager.IsValid())
 	{
 		SessionManager->ClearHistory();
-		ActiveSessionSyncedHistoryCount = 0;
 	}
+	// Destroy all role sessions — history has been wiped, stale context must not persist
+	TArray<EModelRole> Roles;
+	RoleSessions.GetKeys(Roles);
+	for (EModelRole Role : Roles)
+	{
+		DestroyRoleSession(Role);
+	}
+}
+
+void FClaudeCodeSubsystem::DestroyRoleSession(EModelRole Role)
+{
+	FLLMSessionHandle* Session = RoleSessions.Find(Role);
+	if (Session && Session->IsValid())
+	{
+		FString* BackendId = RoleSessionBackendIds.Find(Role);
+		if (BackendId)
+		{
+			ILLMBackend* Backend = BackendRegistry->GetBackend(*BackendId);
+			if (Backend) Backend->DestroySession(*Session);
+		}
+	}
+	RoleSessions.Remove(Role);
+	RoleSessionSyncedHistoryCounts.Remove(Role);
+	RoleSessionBackendIds.Remove(Role);
+}
+
+FString FClaudeCodeSubsystem::BuildAPISystemPrompt(const FClaudePromptOptions& Options) const
+{
+	FString SystemPrompt;
+	if (Options.bIncludeEngineContext)
+	{
+		SystemPrompt = GetUE57SystemPrompt();
+	}
+	if (Options.bIncludeProjectContext)
+	{
+		SystemPrompt += GetProjectContextPrompt();
+	}
+	SystemPrompt += GetProjectInstructionsPrompt();
+	SystemPrompt += GetArchitectureContextPrompt();
+	SystemPrompt += GetKanbanContextPrompt();
+	SystemPrompt += GetAPIBehaviorPrompt();
+	if (!CustomSystemPrompt.IsEmpty())
+	{
+		SystemPrompt += TEXT("\n\n") + CustomSystemPrompt;
+	}
+	return SystemPrompt;
 }
 
 void FClaudeCodeSubsystem::AddExchange(const FString& Prompt, const FString& Response)
@@ -355,16 +400,14 @@ void FClaudeCodeSubsystem::AddExchange(const FString& Prompt, const FString& Res
 
 void FClaudeCodeSubsystem::CancelCurrentRequest()
 {
-	// Cancel CLI runner
 	if (Runner.IsValid())
 	{
 		Runner->Cancel();
 	}
-	// Cancel active API backend (role sends may target a different backend than the current active one)
-	ILLMBackend* Backend = GetActiveBackend();
-	if (Backend)
+	// Cancel all API backends — with per-role sessions any backend could be in-flight
+	for (ILLMBackend* Backend : BackendRegistry->GetAllBackends())
 	{
-		Backend->Cancel();
+		if (Backend) Backend->Cancel();
 	}
 }
 
@@ -521,27 +564,19 @@ FLLMPricingConfig& FClaudeCodeSubsystem::GetPricingConfig()
 
 void FClaudeCodeSubsystem::SetActiveBackendId(const FString& ProviderId)
 {
-	if (BackendRegistry->HasBackend(ProviderId))
-	{
-		// Only destroy session if backend actually changes
-		if (ActiveBackendId != ProviderId)
-		{
-			// Destroy session on the OLD backend before switching
-			ILLMBackend* OldBackend = GetActiveBackend();
-			if (OldBackend && ActiveSession.IsValid())
-			{
-				OldBackend->DestroySession(ActiveSession);
-				ActiveSession = FLLMSessionHandle::Invalid();
-				ActiveSessionSyncedHistoryCount = 0;
-			}
-
-			ActiveBackendId = ProviderId;
-			UE_LOG(LogUnrealClaude, Log, TEXT("Active backend set to: %s"), *ProviderId);
-		}
-	}
-	else
+	if (!BackendRegistry->HasBackend(ProviderId))
 	{
 		UE_LOG(LogUnrealClaude, Warning, TEXT("Unknown backend provider: %s"), *ProviderId);
+		return;
+	}
+
+	if (ActiveBackendId != ProviderId)
+	{
+		// Invalidate the Worker session — its backend is changing.
+		// Other role sessions are unaffected; they each track their own backend.
+		DestroyRoleSession(EModelRole::Worker);
+		ActiveBackendId = ProviderId;
+		UE_LOG(LogUnrealClaude, Log, TEXT("Active backend set to: %s"), *ProviderId);
 	}
 }
 
@@ -556,39 +591,32 @@ void FClaudeCodeSubsystem::SendPromptViaBackend(
 	const FClaudePromptOptions& Options,
 	EModelRole Role)
 {
-	// Resolve model: use role assignment model if one is set, otherwise fall back to selected model.
-	// Do NOT cross-check against ResolveBackendForModel — that function reflects the current
-	// AnthropicMode toggle, which can differ from the saved role ProviderId after the user toggles
-	// CLI on/off, causing the check to fail and fall back to the wrong (Worker) model.
+	// Resolve model and backend for this role.
+	// Worker uses ActiveBackendId (controlled by the model selector).
+	// Non-Worker roles use their own assignment's ProviderId so they never
+	// touch the Worker's session or backend selection.
 	FModelRoleAssignment Assignment = RoleManager->GetAssignment(Role);
 	FString ModelId = Assignment.ModelId.IsEmpty() ? SelectedModel : Assignment.ModelId;
+	FString BackendId = (Role == EModelRole::Worker || Assignment.ProviderId.IsEmpty())
+		? ActiveBackendId
+		: Assignment.ProviderId;
 
-	// If using Claude Code CLI backend, delegate to existing SendPrompt path
-	if (ActiveBackendId == TEXT("claude-code"))
+	// ---- CLI path: stateless, no session management needed ----
+	if (BackendId == TEXT("claude-code"))
 	{
-		// Wrap the LLM callback into the legacy callback format
 		FOnClaudeResponse LegacyComplete;
 		LegacyComplete.BindLambda([this, OnComplete, Role, ModelId](const FString& Response, bool bSuccess)
 		{
 			FLLMTurnResult Result;
 			Result.ResponseText = Response;
 			Result.bSuccess = bSuccess;
-			if (!bSuccess)
-			{
-				Result.ErrorMessage = Response;
-			}
-			// Token usage will be populated from stream events
+			if (!bSuccess) Result.ErrorMessage = Response;
 			Result.TokenUsage.ProviderId = TEXT("claude-code");
 			Result.TokenUsage.ModelId = ModelId;
 			Result.TokenUsage.Role = Role;
-
-			if (OnComplete.IsBound())
-			{
-				OnComplete.Execute(Result);
-			}
+			if (OnComplete.IsBound()) OnComplete.Execute(Result);
 		});
 
-		// Pass role and resolved model through so SendPrompt uses the right model
 		FClaudePromptOptions CLIOptions = Options;
 		CLIOptions.Role = Role;
 		CLIOptions.ModelOverride = ModelId;
@@ -596,14 +624,14 @@ void FClaudeCodeSubsystem::SendPromptViaBackend(
 		return;
 	}
 
-	// Direct API backend path
-	ILLMBackend* Backend = GetActiveBackend();
+	// ---- API path: use per-role session ----
+	ILLMBackend* Backend = BackendRegistry->GetBackend(BackendId);
 	if (!Backend)
 	{
 		if (OnComplete.IsBound())
 		{
 			OnComplete.Execute(FLLMTurnResult::Error(
-				FString::Printf(TEXT("Backend '%s' not found"), *ActiveBackendId)));
+				FString::Printf(TEXT("Backend '%s' not found"), *BackendId)));
 		}
 		return;
 	}
@@ -617,48 +645,53 @@ void FClaudeCodeSubsystem::SendPromptViaBackend(
 		return;
 	}
 
-	// Ensure session exists
-	if (!ActiveSession.IsValid())
+	// Get or create this role's dedicated session.
+	// If the role's assigned backend has changed since the session was created, invalidate it.
+	FLLMSessionHandle& Session    = RoleSessions.FindOrAdd(Role);
+	int32&             SyncCount  = RoleSessionSyncedHistoryCounts.FindOrAdd(Role, 0);
+	FString&           SessionBId = RoleSessionBackendIds.FindOrAdd(Role);
+
+	if (Session.IsValid() && SessionBId != BackendId)
 	{
-		FString SystemPrompt;
-		if (Options.bIncludeEngineContext)
-		{
-			SystemPrompt = GetUE57SystemPrompt();
-		}
-		if (Options.bIncludeProjectContext)
-		{
-			SystemPrompt += GetProjectContextPrompt();
-		}
-		// API backends don't auto-discover CLAUDE.md — inject project instructions
-		SystemPrompt += GetProjectInstructionsPrompt();
-		// Inject key project files that MCP tools can't read (they only handle Blueprints/assets)
-		FString ArchitecturePrompt = GetArchitectureContextPrompt();
-		SystemPrompt += ArchitecturePrompt;
-		FString KanbanPrompt = GetKanbanContextPrompt();
-		SystemPrompt += KanbanPrompt;
-		// Inject agentic behavior instructions for API models
-		SystemPrompt += GetAPIBehaviorPrompt();
-		if (!CustomSystemPrompt.IsEmpty())
-		{
-			SystemPrompt += TEXT("\n\n") + CustomSystemPrompt;
-		}
-
-		UE_LOG(LogUnrealClaude, Log, TEXT("API session created — system prompt: %d chars, architecture: %s, kanban: %s"),
-			SystemPrompt.Len(),
-			ArchitecturePrompt.IsEmpty() ? TEXT("NO") : TEXT("YES"),
-			KanbanPrompt.IsEmpty() ? TEXT("NO") : TEXT("YES"));
-
-		ActiveSession = Backend->CreateTaskSession(SystemPrompt);
+		// Backend changed for this role — destroy stale session
+		ILLMBackend* OldBackend = BackendRegistry->GetBackend(SessionBId);
+		if (OldBackend) OldBackend->DestroySession(Session);
+		Session    = FLLMSessionHandle::Invalid();
+		SyncCount  = 0;
+		SessionBId = FString();
 	}
 
-	// Submit turn (ModelId already resolved above, before the CLI early-return)
-	// Use HistoryPrompt if set (clean user message without role prefix), else fall back to Prompt
+	if (!Session.IsValid())
+	{
+		FString SystemPrompt = BuildAPISystemPrompt(Options);
+		UE_LOG(LogUnrealClaude, Log, TEXT("Creating API session for role %d on '%s' (%d chars)"),
+			(int32)Role, *BackendId, SystemPrompt.Len());
+		Session    = Backend->CreateTaskSession(SystemPrompt);
+		SessionBId = BackendId;
+		SyncCount  = 0;
+	}
+
+	// Sync any new SessionManager exchanges not yet in this role's session
+	// (picks up exchanges from CLI roles or other roles that happened since last sync)
+	if (SessionManager.IsValid())
+	{
+		const TArray<TPair<FString, FString>>& History = SessionManager->GetHistory();
+		if (History.Num() > SyncCount)
+		{
+			TArray<TPair<FString, FString>> NewEntries(
+				History.GetData() + SyncCount,
+				History.Num() - SyncCount);
+			Backend->SeedHistory(Session, NewEntries);
+			SyncCount = History.Num();
+		}
+	}
+
+	// Use HistoryPrompt if set (clean user message without role prefix)
 	FString HistoryKey = Options.HistoryPrompt.IsEmpty() ? Prompt : Options.HistoryPrompt;
+
 	FOnLLMTurnComplete WrappedComplete;
 	WrappedComplete.BindLambda([this, HistoryKey, OnComplete, Role, ModelId](const FLLMTurnResult& Result)
 	{
-		// Record in session history
-		// Prefix non-Worker responses with role label so other roles can tell who said what
 		if (Result.bSuccess && SessionManager.IsValid())
 		{
 			FString StoredResponse = Result.ResponseText;
@@ -670,7 +703,6 @@ void FClaudeCodeSubsystem::SendPromptViaBackend(
 			SessionManager->SaveSession();
 		}
 
-		// Track token usage
 		if (TokenTracker.IsValid() && PricingConfig.IsValid())
 		{
 			FLLMTokenUsage Usage = Result.TokenUsage;
@@ -683,13 +715,9 @@ void FClaudeCodeSubsystem::SendPromptViaBackend(
 			TokenTracker->RecordUsage(Usage);
 		}
 
-		if (OnComplete.IsBound())
-		{
-			OnComplete.Execute(Result);
-		}
+		if (OnComplete.IsBound()) OnComplete.Execute(Result);
 	});
 
-	// Bridge FOnClaudeStreamEvent → FOnLLMStreamProgress (same signature, different delegate types)
 	FOnLLMStreamProgress StreamProgress;
 	if (Options.OnStreamEvent.IsBound())
 	{
@@ -700,26 +728,5 @@ void FClaudeCodeSubsystem::SendPromptViaBackend(
 		});
 	}
 
-	// Sync any SessionManager entries not yet in ActiveSession (cross-role exchanges from CLI roles)
-	if (SessionManager.IsValid())
-	{
-		const TArray<TPair<FString, FString>>& History = SessionManager->GetHistory();
-		if (History.Num() > ActiveSessionSyncedHistoryCount)
-		{
-			TArray<TPair<FString, FString>> NewEntries(
-				History.GetData() + ActiveSessionSyncedHistoryCount,
-				History.Num() - ActiveSessionSyncedHistoryCount);
-			Backend->SeedHistory(ActiveSession, NewEntries);
-			ActiveSessionSyncedHistoryCount = History.Num();
-		}
-	}
-
-	Backend->SubmitTurn(
-		ActiveSession,
-		Prompt,
-		Options.AttachedImagePaths,
-		ModelId,
-		WrappedComplete,
-		StreamProgress
-	);
+	Backend->SubmitTurn(Session, Prompt, Options.AttachedImagePaths, ModelId, WrappedComplete, StreamProgress);
 }

@@ -228,6 +228,36 @@ TSharedRef<SWidget> SClaudeEditorWidget::BuildToolbar()
 		.OnRoleConfig_Lambda([this]() { OpenRoleConfig(); })
 		.OnSendRoleChanged_Lambda([this](EModelRole Role)
 		{
+			// If input is empty, inject a default prompt for the role so the button works without typing
+			if (CurrentInputText.TrimStartAndEnd().IsEmpty())
+			{
+				FString DefaultPrompt;
+				switch (Role)
+				{
+				case EModelRole::Critic:
+					DefaultPrompt = TEXT("Review the current state of the project and the last exchange. What are the risks, gaps, or overlooked assumptions?");
+					break;
+				case EModelRole::Architect:
+					DefaultPrompt = TEXT("Review the current state against ARCHITECTURE.md. Any scope concerns, ripple effects, or milestone alignment issues?");
+					break;
+				case EModelRole::Escalation:
+					DefaultPrompt = TEXT("The previous approach may be stuck. Re-examine the problem from scratch and propose a concrete next step.");
+					break;
+				case EModelRole::DocsAgent:
+					DefaultPrompt = TEXT("Review the recent conversation and update ARCHITECTURE.md and any relevant Docs/ files to reflect confirmed changes.");
+					break;
+				default:
+					break;
+				}
+				if (!DefaultPrompt.IsEmpty())
+				{
+					CurrentInputText = DefaultPrompt;
+					if (InputArea.IsValid())
+					{
+						InputArea->SetText(DefaultPrompt);
+					}
+				}
+			}
 			// Role buttons trigger an immediate send through that role
 			SelectedSendRole = Role;
 			SendMessage();
@@ -841,6 +871,18 @@ void SClaudeEditorWidget::RestoreSession()
 
 void SClaudeEditorWidget::NewSession()
 {
+	// Archive current session before clearing (so it can be restored later)
+	FString SessionPath = FClaudeCodeSubsystem::Get().GetSessionFilePath();
+	if (!SessionPath.IsEmpty() && FPaths::FileExists(SessionPath))
+	{
+		FDateTime Now = FDateTime::UtcNow();
+		FString Timestamp = FString::Printf(TEXT("%04d-%02d-%02dT%02d-%02d"),
+			Now.GetYear(), Now.GetMonth(), Now.GetDay(), Now.GetHour(), Now.GetMinute());
+		FString ArchivePath = FPaths::Combine(FPaths::GetPath(SessionPath),
+			FString::Printf(TEXT("session_%s.json"), *Timestamp));
+		IFileManager::Get().Copy(*ArchivePath, *SessionPath);
+	}
+
 	// Clear the chat display
 	if (ChatMessagesBox.IsValid())
 	{

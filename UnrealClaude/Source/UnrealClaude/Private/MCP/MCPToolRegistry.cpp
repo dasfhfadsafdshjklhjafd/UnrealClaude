@@ -7,6 +7,7 @@
 #include "Containers/Ticker.h"
 
 // Read-only tools
+#include "Tools/MCPTool_Think.h"
 #include "Tools/MCPTool_GetLevelActors.h"
 #include "Tools/MCPTool_GetOutputLog.h"
 #include "Tools/MCPTool_GetScriptHistory.h"
@@ -55,6 +56,7 @@ void FMCPToolRegistry::RegisterBuiltinTools()
 	UE_LOG(LogUnrealClaude, Log, TEXT("Registering MCP tools..."));
 
 	// Read-only tools
+	RegisterTool(MakeShared<FMCPTool_Think>());
 	RegisterTool(MakeShared<FMCPTool_GetLevelActors>());
 	RegisterTool(MakeShared<FMCPTool_GetOutputLog>());
 	RegisterTool(MakeShared<FMCPTool_GetScriptHistory>());

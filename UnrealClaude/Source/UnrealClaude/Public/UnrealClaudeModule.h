@@ -40,6 +40,7 @@ private:
 	void OnAssetAdded(const FAssetData& AssetData);
 	void OnAssetUpdated(const FAssetData& AssetData);
 	void OnAssetRemoved(const FAssetData& AssetData);
+	void OnAssetRegistryFilesLoaded();
 
 	TSharedPtr<class FUICommandList> PluginCommands;
 	TSharedPtr<class SDockTab> ClaudeTab;
@@ -48,4 +49,5 @@ private:
 	FDelegateHandle OnAssetAddedHandle;
 	FDelegateHandle OnAssetUpdatedHandle;
 	FDelegateHandle OnAssetRemovedHandle;
+	FDelegateHandle OnFilesLoadedHandle;
 };

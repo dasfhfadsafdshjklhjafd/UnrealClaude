@@ -174,27 +174,44 @@ void FUnrealClaudeModule::StartupModule()
 void FUnrealClaudeModule::InitializeBlueprintIndex()
 {
 	FBlueprintSearchIndex& Index = FBlueprintSearchIndex::Get();
-	Index.Initialize(); // loads from disk if file exists
+	Index.Initialize(); // loads from disk if file exists — fast path for subsequent launches
 
-	if (!Index.IsBuilt())
-	{
-		// First run — build fresh index. This loads all BPs under /Game/Game/ once and persists.
-		UE_LOG(LogUnrealClaude, Log, TEXT("BlueprintSearchIndex: no index on disk, building now..."));
-		Index.RebuildAll();
-	}
-	else
-	{
-		UE_LOG(LogUnrealClaude, Log, TEXT("BlueprintSearchIndex: loaded %d chunks from disk"), Index.GetChunkCount());
-	}
-
-	// Wire incremental re-index on asset save/remove
 	FAssetRegistryModule& AssetRegistryModule =
 		FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
 	IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
 
-	OnAssetAddedHandle = AssetRegistry.OnAssetAdded().AddRaw(this, &FUnrealClaudeModule::OnAssetAdded);
+	// Wire incremental re-index on asset save/remove
+	OnAssetAddedHandle   = AssetRegistry.OnAssetAdded().AddRaw(this, &FUnrealClaudeModule::OnAssetAdded);
 	OnAssetUpdatedHandle = AssetRegistry.OnAssetUpdated().AddRaw(this, &FUnrealClaudeModule::OnAssetUpdated);
 	OnAssetRemovedHandle = AssetRegistry.OnAssetRemoved().AddRaw(this, &FUnrealClaudeModule::OnAssetRemoved);
+
+	if (Index.IsBuilt())
+	{
+		// Loaded from disk — no rebuild needed
+		UE_LOG(LogUnrealClaude, Log, TEXT("BlueprintSearchIndex: loaded %d chunks from disk"), Index.GetChunkCount());
+	}
+	else if (AssetRegistry.IsLoadingAssets())
+	{
+		// AssetRegistry is still scanning — defer rebuild until it finishes
+		UE_LOG(LogUnrealClaude, Log, TEXT("BlueprintSearchIndex: AssetRegistry still loading, deferring RebuildAll..."));
+		OnFilesLoadedHandle = AssetRegistry.OnFilesLoaded().AddRaw(this, &FUnrealClaudeModule::OnAssetRegistryFilesLoaded);
+	}
+	else
+	{
+		// AssetRegistry is already ready (rare at plugin startup, but handle it)
+		UE_LOG(LogUnrealClaude, Log, TEXT("BlueprintSearchIndex: building index..."));
+		Index.RebuildAll();
+	}
+}
+
+void FUnrealClaudeModule::OnAssetRegistryFilesLoaded()
+{
+	UE_LOG(LogUnrealClaude, Log, TEXT("BlueprintSearchIndex: AssetRegistry ready — building index now"));
+	FBlueprintSearchIndex::Get().RebuildAll();
+	// One-shot delegate — unbind after firing
+	FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry").Get()
+		.OnFilesLoaded().Remove(OnFilesLoadedHandle);
+	OnFilesLoadedHandle.Reset();
 }
 
 void FUnrealClaudeModule::OnAssetAdded(const FAssetData& AssetData)
@@ -231,6 +248,7 @@ void FUnrealClaudeModule::ShutdownModule()
 		AssetRegistry.OnAssetAdded().Remove(OnAssetAddedHandle);
 		AssetRegistry.OnAssetUpdated().Remove(OnAssetUpdatedHandle);
 		AssetRegistry.OnAssetRemoved().Remove(OnAssetRemovedHandle);
+		AssetRegistry.OnFilesLoaded().Remove(OnFilesLoadedHandle);
 	}
 
 	// Stop MCP Server

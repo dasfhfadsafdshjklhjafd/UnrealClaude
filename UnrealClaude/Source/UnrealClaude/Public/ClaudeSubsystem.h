@@ -198,4 +198,7 @@ private:
 	TUniquePtr<FLLMPricingConfig> PricingConfig;
 	FString ActiveBackendId = TEXT("claude-code");
 	FLLMSessionHandle ActiveSession;
+
+	/** Number of SessionManager entries already synced into ActiveSession via SeedHistory */
+	int32 ActiveSessionSyncedHistoryCount = 0;
 };

@@ -239,6 +239,13 @@ public:
 	 */
 	virtual void AppendContext(const FLLMSessionHandle& Session, const FString& ContextText) = 0;
 
+	/**
+	 * Inject prior conversation exchanges into a session as proper user/assistant turns.
+	 * Used to seed an API session with cross-role history from the shared SessionManager.
+	 * No-op for session-oriented backends (CLI manages its own history).
+	 */
+	virtual void SeedHistory(const FLLMSessionHandle& Session, const TArray<TPair<FString, FString>>& Exchanges) {}
+
 	/** Destroy a session and free associated resources */
 	virtual void DestroySession(const FLLMSessionHandle& Session) = 0;
 

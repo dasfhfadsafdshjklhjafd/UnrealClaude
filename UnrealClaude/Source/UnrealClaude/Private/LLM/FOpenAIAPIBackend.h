@@ -40,6 +40,7 @@ public:
 
 	virtual FLLMSessionHandle CreateTaskSession(const FString& SystemPrompt) override;
 	virtual void AppendContext(const FLLMSessionHandle& Session, const FString& ContextText) override;
+	virtual void SeedHistory(const FLLMSessionHandle& Session, const TArray<TPair<FString, FString>>& Exchanges) override;
 	virtual void DestroySession(const FLLMSessionHandle& Session) override;
 
 	virtual bool SubmitTurn(

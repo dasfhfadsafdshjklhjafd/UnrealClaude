@@ -313,6 +313,7 @@ void FClaudeCodeSubsystem::ClearHistory()
 	if (SessionManager.IsValid())
 	{
 		SessionManager->ClearHistory();
+		ActiveSessionSyncedHistoryCount = 0;
 	}
 }
 
@@ -496,6 +497,7 @@ void FClaudeCodeSubsystem::SetActiveBackendId(const FString& ProviderId)
 			{
 				OldBackend->DestroySession(ActiveSession);
 				ActiveSession = FLLMSessionHandle::Invalid();
+				ActiveSessionSyncedHistoryCount = 0;
 			}
 
 			ActiveBackendId = ProviderId;
@@ -657,6 +659,20 @@ void FClaudeCodeSubsystem::SendPromptViaBackend(
 		{
 			StreamDelegate.ExecuteIfBound(Event);
 		});
+	}
+
+	// Sync any SessionManager entries not yet in ActiveSession (cross-role exchanges from CLI roles)
+	if (SessionManager.IsValid())
+	{
+		const TArray<TPair<FString, FString>>& History = SessionManager->GetHistory();
+		if (History.Num() > ActiveSessionSyncedHistoryCount)
+		{
+			TArray<TPair<FString, FString>> NewEntries(
+				History.GetData() + ActiveSessionSyncedHistoryCount,
+				History.Num() - ActiveSessionSyncedHistoryCount);
+			Backend->SeedHistory(ActiveSession, NewEntries);
+			ActiveSessionSyncedHistoryCount = History.Num();
+		}
 	}
 
 	Backend->SubmitTurn(

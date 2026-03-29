@@ -80,6 +80,21 @@ void FAnthropicAPIBackend::AppendContext(const FLLMSessionHandle& Session, const
 	}
 }
 
+void FAnthropicAPIBackend::SeedHistory(const FLLMSessionHandle& Session, const TArray<TPair<FString, FString>>& Exchanges)
+{
+	TSharedPtr<FLLMSessionState>* Found = Sessions.Find(Session.SessionId);
+	if (!Found || !Found->IsValid())
+	{
+		return;
+	}
+	FLLMSessionState& State = **Found;
+	for (const TPair<FString, FString>& Exchange : Exchanges)
+	{
+		State.AddUserMessage(Exchange.Key);
+		State.AddAssistantMessage(Exchange.Value);
+	}
+}
+
 void FAnthropicAPIBackend::DestroySession(const FLLMSessionHandle& Session)
 {
 	Sessions.Remove(Session.SessionId);

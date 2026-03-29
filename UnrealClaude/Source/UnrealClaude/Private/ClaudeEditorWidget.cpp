@@ -271,7 +271,7 @@ TSharedRef<SWidget> SClaudeEditorWidget::BuildToolbar()
 					DefaultPrompt = TEXT("The previous approach may be stuck. Re-examine the problem from scratch and propose a concrete next step.");
 					break;
 				case EModelRole::DocsAgent:
-					DefaultPrompt = TEXT("Review the recent conversation and update ARCHITECTURE.md and any relevant Docs/ files to reflect confirmed changes.");
+					DefaultPrompt = TEXT("Review the recent conversation and update any relevant Docs/ files to reflect confirmed changes.");
 					break;
 				default:
 					break;

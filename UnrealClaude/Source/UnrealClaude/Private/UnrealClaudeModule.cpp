@@ -8,6 +8,8 @@
 #include "ScriptExecutionManager.h"
 #include "MCP/UnrealClaudeMCPServer.h"
 #include "ProjectContext.h"
+#include "RAG/FBlueprintSearchIndex.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 
 #include "Framework/Docking/TabManager.h"
 #include "Framework/Notifications/NotificationManager.h"
@@ -164,11 +166,72 @@ void FUnrealClaudeModule::StartupModule()
 
 	// Initialize script execution manager (creates script directories)
 	FScriptExecutionManager::Get();
+
+	// Initialize Blueprint search index (loads from disk if available)
+	InitializeBlueprintIndex();
+}
+
+void FUnrealClaudeModule::InitializeBlueprintIndex()
+{
+	FBlueprintSearchIndex& Index = FBlueprintSearchIndex::Get();
+	Index.Initialize(); // loads from disk if file exists
+
+	if (!Index.IsBuilt())
+	{
+		// First run — build fresh index. This loads all BPs under /Game/Game/ once and persists.
+		UE_LOG(LogUnrealClaude, Log, TEXT("BlueprintSearchIndex: no index on disk, building now..."));
+		Index.RebuildAll();
+	}
+	else
+	{
+		UE_LOG(LogUnrealClaude, Log, TEXT("BlueprintSearchIndex: loaded %d chunks from disk"), Index.GetChunkCount());
+	}
+
+	// Wire incremental re-index on asset save/remove
+	FAssetRegistryModule& AssetRegistryModule =
+		FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
+	IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
+
+	OnAssetAddedHandle = AssetRegistry.OnAssetAdded().AddRaw(this, &FUnrealClaudeModule::OnAssetAdded);
+	OnAssetUpdatedHandle = AssetRegistry.OnAssetUpdated().AddRaw(this, &FUnrealClaudeModule::OnAssetUpdated);
+	OnAssetRemovedHandle = AssetRegistry.OnAssetRemoved().AddRaw(this, &FUnrealClaudeModule::OnAssetRemoved);
+}
+
+void FUnrealClaudeModule::OnAssetAdded(const FAssetData& AssetData)
+{
+	if (!AssetData.AssetClassPath.ToString().Contains(TEXT("Blueprint"))) return;
+	if (!FBlueprintSearchIndex::Get().IsBuilt()) return;
+	FBlueprintSearchIndex::Get().IndexBlueprint(AssetData.GetObjectPathString());
+}
+
+void FUnrealClaudeModule::OnAssetUpdated(const FAssetData& AssetData)
+{
+	if (!AssetData.AssetClassPath.ToString().Contains(TEXT("Blueprint"))) return;
+	if (!FBlueprintSearchIndex::Get().IsBuilt()) return;
+	FBlueprintSearchIndex::Get().IndexBlueprint(AssetData.GetObjectPathString());
+}
+
+void FUnrealClaudeModule::OnAssetRemoved(const FAssetData& AssetData)
+{
+	if (!AssetData.AssetClassPath.ToString().Contains(TEXT("Blueprint"))) return;
+	if (!FBlueprintSearchIndex::Get().IsBuilt()) return;
+	FBlueprintSearchIndex::Get().RemoveBlueprint(AssetData.GetObjectPathString());
 }
 
 void FUnrealClaudeModule::ShutdownModule()
 {
 	UE_LOG(LogUnrealClaude, Log, TEXT("UnrealClaude module shutting down"));
+
+	// Unhook asset registry delegates
+	if (FModuleManager::Get().IsModuleLoaded("AssetRegistry"))
+	{
+		FAssetRegistryModule& AssetRegistryModule =
+			FModuleManager::GetModuleChecked<FAssetRegistryModule>("AssetRegistry");
+		IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
+		AssetRegistry.OnAssetAdded().Remove(OnAssetAddedHandle);
+		AssetRegistry.OnAssetUpdated().Remove(OnAssetUpdatedHandle);
+		AssetRegistry.OnAssetRemoved().Remove(OnAssetRemovedHandle);
+	}
 
 	// Stop MCP Server
 	StopMCPServer();

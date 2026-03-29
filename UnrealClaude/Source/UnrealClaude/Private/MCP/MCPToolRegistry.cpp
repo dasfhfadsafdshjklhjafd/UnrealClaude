@@ -8,6 +8,8 @@
 
 // Read-only tools
 #include "Tools/MCPTool_Think.h"
+#include "Tools/MCPTool_BlueprintSearch.h"
+#include "Tools/MCPTool_BlueprintVarSearch.h"
 #include "Tools/MCPTool_GetLevelActors.h"
 #include "Tools/MCPTool_GetOutputLog.h"
 #include "Tools/MCPTool_GetScriptHistory.h"
@@ -57,6 +59,8 @@ void FMCPToolRegistry::RegisterBuiltinTools()
 
 	// Read-only tools
 	RegisterTool(MakeShared<FMCPTool_Think>());
+	RegisterTool(MakeShared<FMCPTool_BlueprintSearch>());
+	RegisterTool(MakeShared<FMCPTool_BlueprintVarSearch>());
 	RegisterTool(MakeShared<FMCPTool_GetLevelActors>());
 	RegisterTool(MakeShared<FMCPTool_GetOutputLog>());
 	RegisterTool(MakeShared<FMCPTool_GetScriptHistory>());

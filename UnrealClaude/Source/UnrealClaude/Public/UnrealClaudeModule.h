@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Modules/ModuleManager.h"
 #include "UnrealClaudeConstants.h"
+#include "AssetRegistry/AssetData.h"
 
 DECLARE_LOG_CATEGORY_EXTERN(LogUnrealClaude, Log, All);
 
@@ -34,8 +35,17 @@ private:
 	void UnregisterMenus();
 	void StartMCPServer();
 	void StopMCPServer();
+	void InitializeBlueprintIndex();
+
+	void OnAssetAdded(const FAssetData& AssetData);
+	void OnAssetUpdated(const FAssetData& AssetData);
+	void OnAssetRemoved(const FAssetData& AssetData);
 
 	TSharedPtr<class FUICommandList> PluginCommands;
 	TSharedPtr<class SDockTab> ClaudeTab;
 	TSharedPtr<FUnrealClaudeMCPServer> MCPServer;
+
+	FDelegateHandle OnAssetAddedHandle;
+	FDelegateHandle OnAssetUpdatedHandle;
+	FDelegateHandle OnAssetRemovedHandle;
 };

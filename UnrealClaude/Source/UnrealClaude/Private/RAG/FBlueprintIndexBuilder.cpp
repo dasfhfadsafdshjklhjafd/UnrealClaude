@@ -222,10 +222,13 @@ void FBlueprintIndexBuilder::BuildGraphChunks(UBlueprint* BP, const FString& BpP
 	{
 		if (!Graph || Graph->Nodes.IsEmpty()) continue;
 
-		// Skip pure anim-graph implementation details
+		// Skip AnimBP graph types — their structure is navigated via blueprint_read_graph,
+		// and fixed-window chunks of state machine / blend tree nodes are pure noise in search.
 		const FName GraphClass = Graph->GetClass()->GetFName();
 		if (GraphClass == TEXT("AnimationTransitionGraph") ||
-			GraphClass == TEXT("AnimationConduitGraph"))
+			GraphClass == TEXT("AnimationConduitGraph") ||
+			GraphClass == TEXT("AnimationGraph") ||
+			GraphClass == TEXT("AnimationStateGraph"))
 		{
 			continue;
 		}

@@ -535,14 +535,12 @@ void FClaudeCodeSubsystem::SendPromptViaBackend(
 	const FClaudePromptOptions& Options,
 	EModelRole Role)
 {
-	// Resolve model: use role assignment if it targets this backend, else use selected model
+	// Resolve model: use role assignment model if one is set, otherwise fall back to selected model.
+	// Do NOT cross-check against ResolveBackendForModel — that function reflects the current
+	// AnthropicMode toggle, which can differ from the saved role ProviderId after the user toggles
+	// CLI on/off, causing the check to fail and fall back to the wrong (Worker) model.
 	FModelRoleAssignment Assignment = RoleManager->GetAssignment(Role);
-	FString ModelId = SelectedModel;
-	FString AssignmentBackend = BackendRegistry->ResolveBackendForModel(Assignment.ModelId);
-	if (AssignmentBackend == ActiveBackendId)
-	{
-		ModelId = Assignment.ModelId;
-	}
+	FString ModelId = Assignment.ModelId.IsEmpty() ? SelectedModel : Assignment.ModelId;
 
 	// If using Claude Code CLI backend, delegate to existing SendPrompt path
 	if (ActiveBackendId == TEXT("claude-code"))

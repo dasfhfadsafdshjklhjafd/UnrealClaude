@@ -33,6 +33,7 @@ public:
 		SLATE_ATTRIBUTE(bool, bRestoreEnabled)
 		SLATE_ATTRIBUTE(FString, SelectedModel)
 		SLATE_ATTRIBUTE(bool, bAnthropicUseCLI)
+		SLATE_ATTRIBUTE(EModelRole, ActiveSendRole)
 		SLATE_ATTRIBUTE(FText, TokenCountText)
 		SLATE_ATTRIBUTE(FSlateColor, TokenCountColor)
 		SLATE_ATTRIBUTE(FText, CostText)
@@ -62,6 +63,7 @@ private:
 	TAttribute<bool> bRestoreEnabled;
 	TAttribute<FString> SelectedModel;
 	TAttribute<bool> bAnthropicUseCLI;
+	TAttribute<EModelRole> ActiveSendRole;
 	TAttribute<FText> TokenCountText;
 	TAttribute<FSlateColor> TokenCountColor;
 	TAttribute<FText> CostText;

@@ -244,9 +244,17 @@ TSharedRef<SWidget> SClaudeEditorWidget::BuildToolbar()
 		.OnCopyChat_Lambda([this]() { CopyWholeChat(); })
 		.OnCompact_Lambda([this]() { CompactSession(); })
 		.OnRoleConfig_Lambda([this]() { OpenRoleConfig(); })
+		.ActiveSendRole_Lambda([this]() { return SelectedSendRole; })
 		.OnSendRoleChanged_Lambda([this](EModelRole Role)
 		{
-			// If input is empty, inject a default prompt for the role so the button works without typing
+			if (Role == EModelRole::Worker)
+			{
+				// Toggling off — deactivate sticky mode, no send
+				SelectedSendRole = EModelRole::Worker;
+				return;
+			}
+
+			// Activating a role — inject default if input is empty
 			if (CurrentInputText.TrimStartAndEnd().IsEmpty())
 			{
 				FString DefaultPrompt;
@@ -276,10 +284,10 @@ TSharedRef<SWidget> SClaudeEditorWidget::BuildToolbar()
 					}
 				}
 			}
-			// Role buttons trigger an immediate send through that role
+
+			// Activate role and send — role stays active for all subsequent messages
 			SelectedSendRole = Role;
 			SendMessage();
-			SelectedSendRole = EModelRole::Worker; // Reset after send
 		})
 		.SelectedModel_Lambda([this]() { return SelectedModel; })
 		.bAnthropicUseCLI_Lambda([this]() { return bAnthropicUseCLI; })

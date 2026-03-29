@@ -69,6 +69,7 @@ void SClaudeToolbar::Construct(const FArguments& InArgs)
 	OnModelChanged = InArgs._OnModelChanged;
 	OnAnthropicModeChanged = InArgs._OnAnthropicModeChanged;
 	OnSendRoleChanged = InArgs._OnSendRoleChanged;
+	ActiveSendRole = InArgs._ActiveSendRole;
 
 	// Initialize model options from all backends
 	RefreshModelOptions();
@@ -265,46 +266,74 @@ void SClaudeToolbar::Construct(const FArguments& InArgs)
 					.ToolTipText(LOCTEXT("CompactTip", "Summarize conversation to free up context window"))
 				]
 
-				// Role action buttons (each fires OnSendRoleChanged to route next message)
+				// Role toggle buttons — click to activate sticky mode, click again to return to Worker
 				+ SHorizontalBox::Slot()
 				.AutoWidth()
 				.VAlign(VAlign_Center)
 				.Padding(4.0f, 0.0f, 0.0f, 0.0f)
 				[
-					SNew(SButton)
-					.Text(LOCTEXT("AskCritic", "Critic"))
-					.OnClicked_Lambda([this]() { OnSendRoleChanged.ExecuteIfBound(EModelRole::Critic); return FReply::Handled(); })
-					.ToolTipText(LOCTEXT("CriticTip", "Send your message for review by the Critic model"))
+					SNew(SCheckBox)
+					.Style(FAppStyle::Get(), "ToggleButtonCheckbox")
+					.IsChecked_Lambda([this]() { return ActiveSendRole.Get() == EModelRole::Critic ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+					.OnCheckStateChanged_Lambda([this](ECheckBoxState NewState)
+					{
+						OnSendRoleChanged.ExecuteIfBound(NewState == ECheckBoxState::Checked ? EModelRole::Critic : EModelRole::Worker);
+					})
+					.ToolTipText(LOCTEXT("CriticTip", "Toggle Critic mode — stays active for all sends until toggled off"))
+					[
+						SNew(STextBlock).Text(LOCTEXT("AskCritic", "Critic"))
+					]
 				]
 				+ SHorizontalBox::Slot()
 				.AutoWidth()
 				.VAlign(VAlign_Center)
 				.Padding(2.0f, 0.0f, 0.0f, 0.0f)
 				[
-					SNew(SButton)
-					.Text(LOCTEXT("AskArchitect", "Architect"))
-					.OnClicked_Lambda([this]() { OnSendRoleChanged.ExecuteIfBound(EModelRole::Architect); return FReply::Handled(); })
-					.ToolTipText(LOCTEXT("ArchitectTip", "Send your message for architecture review"))
+					SNew(SCheckBox)
+					.Style(FAppStyle::Get(), "ToggleButtonCheckbox")
+					.IsChecked_Lambda([this]() { return ActiveSendRole.Get() == EModelRole::Architect ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+					.OnCheckStateChanged_Lambda([this](ECheckBoxState NewState)
+					{
+						OnSendRoleChanged.ExecuteIfBound(NewState == ECheckBoxState::Checked ? EModelRole::Architect : EModelRole::Worker);
+					})
+					.ToolTipText(LOCTEXT("ArchitectTip", "Toggle Architect mode — stays active for all sends until toggled off"))
+					[
+						SNew(STextBlock).Text(LOCTEXT("AskArchitect", "Architect"))
+					]
 				]
 				+ SHorizontalBox::Slot()
 				.AutoWidth()
 				.VAlign(VAlign_Center)
 				.Padding(2.0f, 0.0f, 0.0f, 0.0f)
 				[
-					SNew(SButton)
-					.Text(LOCTEXT("Escalate", "Escalate"))
-					.OnClicked_Lambda([this]() { OnSendRoleChanged.ExecuteIfBound(EModelRole::Escalation); return FReply::Handled(); })
-					.ToolTipText(LOCTEXT("EscalateTip", "Escalate to a stronger model (when stuck)"))
+					SNew(SCheckBox)
+					.Style(FAppStyle::Get(), "ToggleButtonCheckbox")
+					.IsChecked_Lambda([this]() { return ActiveSendRole.Get() == EModelRole::Escalation ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+					.OnCheckStateChanged_Lambda([this](ECheckBoxState NewState)
+					{
+						OnSendRoleChanged.ExecuteIfBound(NewState == ECheckBoxState::Checked ? EModelRole::Escalation : EModelRole::Worker);
+					})
+					.ToolTipText(LOCTEXT("EscalateTip", "Toggle Escalation mode — uses a stronger model for all sends until toggled off"))
+					[
+						SNew(STextBlock).Text(LOCTEXT("Escalate", "Escalate"))
+					]
 				]
 				+ SHorizontalBox::Slot()
 				.AutoWidth()
 				.VAlign(VAlign_Center)
 				.Padding(2.0f, 0.0f, 0.0f, 0.0f)
 				[
-					SNew(SButton)
-					.Text(LOCTEXT("WriteDocs", "Docs"))
-					.OnClicked_Lambda([this]() { OnSendRoleChanged.ExecuteIfBound(EModelRole::DocsAgent); return FReply::Handled(); })
-					.ToolTipText(LOCTEXT("DocsTip", "Route to DocsAgent for documentation edits"))
+					SNew(SCheckBox)
+					.Style(FAppStyle::Get(), "ToggleButtonCheckbox")
+					.IsChecked_Lambda([this]() { return ActiveSendRole.Get() == EModelRole::DocsAgent ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+					.OnCheckStateChanged_Lambda([this](ECheckBoxState NewState)
+					{
+						OnSendRoleChanged.ExecuteIfBound(NewState == ECheckBoxState::Checked ? EModelRole::DocsAgent : EModelRole::Worker);
+					})
+					.ToolTipText(LOCTEXT("DocsTip", "Toggle DocsAgent mode — routes all sends to DocsAgent until toggled off"))
+					[
+						SNew(STextBlock).Text(LOCTEXT("WriteDocs", "Docs"))
+					]
 				]
 
 				+ SHorizontalBox::Slot()

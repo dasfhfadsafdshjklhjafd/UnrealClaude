@@ -334,9 +334,16 @@ void FClaudeCodeSubsystem::AddExchange(const FString& Prompt, const FString& Res
 
 void FClaudeCodeSubsystem::CancelCurrentRequest()
 {
+	// Cancel CLI runner
 	if (Runner.IsValid())
 	{
 		Runner->Cancel();
+	}
+	// Cancel active API backend (role sends may target a different backend than the current active one)
+	ILLMBackend* Backend = GetActiveBackend();
+	if (Backend)
+	{
+		Backend->Cancel();
 	}
 }
 

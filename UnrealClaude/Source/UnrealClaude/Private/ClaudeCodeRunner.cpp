@@ -940,6 +940,11 @@ void FClaudeCodeRunner::Cancel()
 	{
 		FPlatformProcess::TerminateProc(ProcessHandle, true);
 	}
+
+	// Force the busy flag clear immediately — TerminateProc may not kill child
+	// Node.js processes, leaving the thread stuck in pipe reads and never reaching
+	// Exit(). Clearing here ensures new requests aren't permanently blocked.
+	bIsExecuting = false;
 }
 
 bool FClaudeCodeRunner::Init()

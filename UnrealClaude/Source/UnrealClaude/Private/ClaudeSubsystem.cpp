@@ -116,12 +116,19 @@ void FClaudeCodeSubsystem::SendPrompt(
 	// Wrap completion to store history and save session
 	// Use HistoryPrompt if set (clean user message without role prefix), else fall back to Prompt
 	FString HistoryKey = Options.HistoryPrompt.IsEmpty() ? Prompt : Options.HistoryPrompt;
+	EModelRole HistoryRole = Options.Role;
 	FOnClaudeResponse WrappedComplete;
-	WrappedComplete.BindLambda([this, HistoryKey, OnComplete](const FString& Response, bool bSuccess)
+	WrappedComplete.BindLambda([this, HistoryKey, HistoryRole, OnComplete](const FString& Response, bool bSuccess)
 	{
 		if (bSuccess && SessionManager.IsValid())
 		{
-			SessionManager->AddExchange(HistoryKey, Response);
+			// Prefix non-Worker responses with role label so other roles can tell who said what
+			FString StoredResponse = Response;
+			if (HistoryRole != EModelRole::Worker)
+			{
+				StoredResponse = FString::Printf(TEXT("[%s]: %s"), *GetModelRoleDisplayName(HistoryRole), *Response);
+			}
+			SessionManager->AddExchange(HistoryKey, StoredResponse);
 			SessionManager->SaveSession();
 		}
 		OnComplete.ExecuteIfBound(Response, bSuccess);
@@ -625,9 +632,15 @@ void FClaudeCodeSubsystem::SendPromptViaBackend(
 	WrappedComplete.BindLambda([this, HistoryKey, OnComplete, Role, ModelId](const FLLMTurnResult& Result)
 	{
 		// Record in session history
+		// Prefix non-Worker responses with role label so other roles can tell who said what
 		if (Result.bSuccess && SessionManager.IsValid())
 		{
-			SessionManager->AddExchange(HistoryKey, Result.ResponseText);
+			FString StoredResponse = Result.ResponseText;
+			if (Role != EModelRole::Worker)
+			{
+				StoredResponse = FString::Printf(TEXT("[%s]: %s"), *GetModelRoleDisplayName(Role), *Result.ResponseText);
+			}
+			SessionManager->AddExchange(HistoryKey, StoredResponse);
 			SessionManager->SaveSession();
 		}
 

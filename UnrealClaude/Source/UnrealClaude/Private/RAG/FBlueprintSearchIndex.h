@@ -70,4 +70,5 @@ private:
 	TMap<FString, TArray<int32>>   InvertedIndex; // keyword → chunk indices
 	FString                        IndexFilePath;
 	bool                           bBuilt = false;
+	bool                           bInitialized = false;
 };

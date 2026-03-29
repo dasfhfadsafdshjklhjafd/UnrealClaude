@@ -21,6 +21,9 @@ FBlueprintSearchIndex& FBlueprintSearchIndex::Get()
 
 void FBlueprintSearchIndex::Initialize()
 {
+	if (bInitialized) return;
+	bInitialized = true;
+
 	IndexFilePath = FPaths::Combine(
 		FPaths::ProjectSavedDir(),
 		TEXT("UnrealClaude"),

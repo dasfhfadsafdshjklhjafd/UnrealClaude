@@ -29,10 +29,14 @@ void FClaudeSessionManager::ClearHistory()
 	ConversationHistory.Empty();
 }
 
+FString FClaudeSessionManager::GetSessionDir() const
+{
+	return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("UnrealClaude"));
+}
+
 FString FClaudeSessionManager::GetSessionFilePath() const
 {
-	FString SaveDir = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("UnrealClaude"));
-	return FPaths::Combine(SaveDir, TEXT("session.json"));
+	return FPaths::Combine(GetSessionDir(), TEXT("session.json"));
 }
 
 bool FClaudeSessionManager::HasSavedSession() const
@@ -151,5 +155,51 @@ bool FClaudeSessionManager::LoadSession()
 			*SessionPath, ConversationHistory.Num());
 	}
 
+	return true;
+}
+
+bool FClaudeSessionManager::LoadSessionFromFile(const FString& FilePath)
+{
+	if (!IFileManager::Get().FileExists(*FilePath))
+	{
+		UE_LOG(LogUnrealClaude, Log, TEXT("Session archive not found: %s"), *FilePath);
+		return false;
+	}
+
+	FString JsonString;
+	if (!FFileHelper::LoadFileToString(JsonString, *FilePath))
+	{
+		UE_LOG(LogUnrealClaude, Error, TEXT("Failed to read session archive: %s"), *FilePath);
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> RootObject = FJsonUtils::Parse(JsonString);
+	if (!RootObject.IsValid())
+	{
+		UE_LOG(LogUnrealClaude, Error, TEXT("Failed to parse session archive JSON from: %s"), *FilePath);
+		return false;
+	}
+
+	ConversationHistory.Empty();
+
+	TArray<TSharedPtr<FJsonValue>> MessagesArray;
+	if (FJsonUtils::GetArrayField(RootObject, TEXT("messages"), MessagesArray))
+	{
+		for (const TSharedPtr<FJsonValue>& MessageValue : MessagesArray)
+		{
+			const TSharedPtr<FJsonObject>* MessageObject;
+			if (MessageValue->TryGetObject(MessageObject))
+			{
+				FString UserMessage, AssistantMessage;
+				if (FJsonUtils::GetStringField(*MessageObject, TEXT("user"), UserMessage) &&
+					FJsonUtils::GetStringField(*MessageObject, TEXT("assistant"), AssistantMessage))
+				{
+					ConversationHistory.Add(TPair<FString, FString>(UserMessage, AssistantMessage));
+				}
+			}
+		}
+	}
+
+	UE_LOG(LogUnrealClaude, Log, TEXT("Loaded archive: %s (%d messages)"), *FilePath, ConversationHistory.Num());
 	return true;
 }

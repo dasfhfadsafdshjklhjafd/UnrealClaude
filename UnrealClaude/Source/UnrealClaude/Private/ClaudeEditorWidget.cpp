@@ -238,6 +238,7 @@ TSharedRef<SWidget> SClaudeEditorWidget::BuildToolbar()
 		.OnProjectContextChanged_Lambda([this](bool bEnabled) { bIncludeProjectContext = bEnabled; })
 		.OnRefreshContext_Lambda([this]() { RefreshProjectContext(); })
 		.OnRestoreSession_Lambda([this]() { RestoreSession(); })
+		.OnRestoreArchive_Lambda([this](const FString& Path) { RestoreSessionFromFile(Path); })
 		.OnNewSession_Lambda([this]() { NewSession(); })
 		.OnClear_Lambda([this]() { ClearChat(); })
 		.OnCopyLast_Lambda([this]() { CopyToClipboard(); })
@@ -293,15 +294,15 @@ TSharedRef<SWidget> SClaudeEditorWidget::BuildToolbar()
 		.bAnthropicUseCLI_Lambda([this]() { return bAnthropicUseCLI; })
 		.TokenCountText_Lambda([this]() -> FText
 		{
-			int32 TotalK = (SessionInputTokens + SessionOutputTokens + 999) / 1000;
-			if (TotalK == 0) return FText::GetEmpty();
-			return FText::FromString(FString::Printf(TEXT("ctx: %dk"), TotalK));
+			if (LastRequestInputTokens == 0) return FText::GetEmpty();
+			int32 CtxK = (LastRequestInputTokens + 999) / 1000;
+			int32 SessionK = (SessionInputTokens + SessionOutputTokens + 999) / 1000;
+			return FText::FromString(FString::Printf(TEXT("ctx: %dk  session: %dk"), CtxK, SessionK));
 		})
 		.TokenCountColor_Lambda([this]() -> FSlateColor
 		{
-			int32 Total = SessionInputTokens + SessionOutputTokens;
-			if (Total > 130000) return FSlateColor(FLinearColor(1.0f, 0.25f, 0.25f));
-			if (Total > 80000)  return FSlateColor(FLinearColor(1.0f, 0.7f, 0.1f));
+			if (LastRequestInputTokens > 130000) return FSlateColor(FLinearColor(1.0f, 0.25f, 0.25f));
+			if (LastRequestInputTokens > 80000)  return FSlateColor(FLinearColor(1.0f, 0.7f, 0.1f));
 			return FSlateColor(FLinearColor(0.5f, 0.5f, 0.55f));
 		})
 		.CostText_Lambda([this]() -> FText
@@ -692,6 +693,7 @@ void SClaudeEditorWidget::ClearChat()
 	FClaudeCodeSubsystem::Get().ClearHistory();
 	SessionInputTokens = 0;
 	SessionOutputTokens = 0;
+	LastRequestInputTokens = 0;
 	LastResponse.Empty();
 	ResetStreamingState();
 
@@ -895,6 +897,36 @@ void SClaudeEditorWidget::RestoreSession()
 	}
 }
 
+void SClaudeEditorWidget::RestoreSessionFromFile(const FString& FilePath)
+{
+	FClaudeCodeSubsystem& Subsystem = FClaudeCodeSubsystem::Get();
+
+	if (Subsystem.LoadSessionFromFile(FilePath))
+	{
+		if (ChatMessagesBox.IsValid())
+		{
+			ChatMessagesBox->ClearChildren();
+		}
+
+		const TArray<TPair<FString, FString>>& History = Subsystem.GetHistory();
+		FString ArchiveName = FPaths::GetBaseFilename(FilePath);
+		ArchiveName.RemoveFromStart(TEXT("session_"));
+		AddMessage(FString::Printf(TEXT("Archive loaded: %s"), *ArchiveName), false);
+
+		for (const TPair<FString, FString>& Exchange : History)
+		{
+			AddMessage(Exchange.Key, true);
+			AddMessage(Exchange.Value, false);
+		}
+
+		AddMessage(FString::Printf(TEXT("Restored %d previous exchanges. Continue the conversation below."), History.Num()), false);
+	}
+	else
+	{
+		AddMessage(FString::Printf(TEXT("Failed to load archive: %s"), *FPaths::GetCleanFilename(FilePath)), false);
+	}
+}
+
 void SClaudeEditorWidget::NewSession()
 {
 	// Archive current session before clearing (so it can be restored later)
@@ -919,6 +951,7 @@ void SClaudeEditorWidget::NewSession()
 	FClaudeCodeSubsystem::Get().ClearHistory();
 	SessionInputTokens = 0;
 	SessionOutputTokens = 0;
+	LastRequestInputTokens = 0;
 
 	// Clear local state
 	LastResponse.Empty();
@@ -1452,7 +1485,8 @@ void SClaudeEditorWidget::HandleResultEvent(const FClaudeStreamEvent& Event)
 		StatsText += FString::Printf(TEXT(" | $%.4f"), Event.TotalCostUsd);
 	}
 
-	// Accumulate session token counts
+	// Track last-request input tokens (= current context window size) and accumulate session totals
+	LastRequestInputTokens = Event.InputTokens;
 	SessionInputTokens += Event.InputTokens;
 	SessionOutputTokens += Event.OutputTokens;
 

@@ -12,6 +12,7 @@ DECLARE_DELEGATE(FOnToolbarAction)
 DECLARE_DELEGATE_OneParam(FOnCheckboxChanged, bool)
 DECLARE_DELEGATE_OneParam(FOnModelChanged, const FString& /*ModelId*/)
 DECLARE_DELEGATE_OneParam(FOnRoleChanged, EModelRole /*Role*/)
+DECLARE_DELEGATE_OneParam(FOnRestoreArchive, const FString& /*FilePath*/)
 
 /**
  * Toolbar widget for Claude Editor
@@ -50,6 +51,7 @@ public:
 		SLATE_EVENT(FOnModelChanged, OnModelChanged)
 		SLATE_EVENT(FOnCheckboxChanged, OnAnthropicModeChanged)
 		SLATE_EVENT(FOnRoleChanged, OnSendRoleChanged)
+		SLATE_EVENT(FOnRestoreArchive, OnRestoreArchive)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
@@ -81,6 +83,7 @@ private:
 	FOnModelChanged OnModelChanged;
 	FOnCheckboxChanged OnAnthropicModeChanged;
 	FOnRoleChanged OnSendRoleChanged;
+	FOnRestoreArchive OnRestoreArchive;
 
 	TArray<TSharedPtr<FString>> ModelOptions;
 	TSharedPtr<SComboBox<TSharedPtr<FString>>> ModelComboBox;

@@ -80,6 +80,9 @@ private:
 	/** Restore previous session context */
 	void RestoreSession();
 
+	/** Restore a specific archived session file */
+	void RestoreSessionFromFile(const FString& FilePath);
+
 	/** Start a new session (clear history and saved session) */
 	void NewSession();
 	
@@ -207,11 +210,14 @@ private:
 	/** Selected role for next send (defaults to Worker) */
 	EModelRole SelectedSendRole = EModelRole::Worker;
 
-	/** Accumulated input token count for the current session */
+	/** Accumulated input token count for the current session (total cost) */
 	int32 SessionInputTokens = 0;
 
-	/** Accumulated output token count for the current session */
+	/** Accumulated output token count for the current session (total cost) */
 	int32 SessionOutputTokens = 0;
+
+	/** Input tokens for the most recent request (= current context window size) */
+	int32 LastRequestInputTokens = 0;
 
 	/** Handle streaming progress from Claude (legacy, still used for accumulation) */
 	void OnClaudeProgress(const FString& PartialOutput);

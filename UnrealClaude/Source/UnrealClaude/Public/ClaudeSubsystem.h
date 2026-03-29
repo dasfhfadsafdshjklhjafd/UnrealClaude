@@ -125,6 +125,12 @@ public:
 	/** Load previous session from disk */
 	bool LoadSession();
 
+	/** Load a specific archived session file */
+	bool LoadSessionFromFile(const FString& FilePath);
+
+	/** Get the session save directory */
+	FString GetSessionDir() const;
+
 	/** Check if a previous session exists */
 	bool HasSavedSession() const;
 

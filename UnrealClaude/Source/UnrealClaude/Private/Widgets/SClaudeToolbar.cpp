@@ -6,11 +6,15 @@
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SComboBox.h"
+#include "Widgets/Input/SComboButton.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Layout/SBorder.h"
+#include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SNullWidget.h"
 #include "Styling/AppStyle.h"
+#include "HAL/FileManager.h"
+#include "Misc/Paths.h"
 
 #define LOCTEXT_NAMESPACE "UnrealClaude"
 
@@ -69,6 +73,7 @@ void SClaudeToolbar::Construct(const FArguments& InArgs)
 	OnModelChanged = InArgs._OnModelChanged;
 	OnAnthropicModeChanged = InArgs._OnAnthropicModeChanged;
 	OnSendRoleChanged = InArgs._OnSendRoleChanged;
+	OnRestoreArchive = InArgs._OnRestoreArchive;
 	ActiveSendRole = InArgs._ActiveSendRole;
 
 	// Initialize model options from all backends
@@ -199,8 +204,74 @@ void SClaudeToolbar::Construct(const FArguments& InArgs)
 					SNew(SButton)
 					.Text(LOCTEXT("Restore", "Restore"))
 					.OnClicked_Lambda([this]() { OnRestoreSession.ExecuteIfBound(); return FReply::Handled(); })
-					.ToolTipText(LOCTEXT("RestoreContextTip", "Restore previous session context from disk"))
+					.ToolTipText(LOCTEXT("RestoreContextTip", "Restore current session.json into chat view"))
 					.IsEnabled_Lambda([this]() { return bRestoreEnabled.Get(); })
+				]
+
+				// Archives combobutton — pick a specific previous session
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				.Padding(2.0f, 0.0f)
+				[
+					SNew(SComboButton)
+					.ButtonContent()
+					[
+						SNew(STextBlock)
+						.Text(LOCTEXT("Archives", "Archives"))
+						.TextStyle(FAppStyle::Get(), "SmallText")
+					]
+					.OnGetMenuContent_Lambda([this]() -> TSharedRef<SWidget>
+					{
+						FString SessionDir = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("UnrealClaude"));
+						TArray<FString> ArchiveFiles;
+						IFileManager::Get().FindFiles(ArchiveFiles,
+							*FPaths::Combine(SessionDir, TEXT("session_*.json")), true, false);
+						ArchiveFiles.Sort([](const FString& A, const FString& B) { return A > B; }); // newest first
+
+						TSharedRef<SScrollBox> List = SNew(SScrollBox);
+
+						if (ArchiveFiles.IsEmpty())
+						{
+							List->AddSlot()
+							[
+								SNew(STextBlock)
+								.Text(LOCTEXT("NoArchives", "No archived sessions found"))
+								.Margin(FMargin(8.0f, 4.0f))
+							];
+						}
+
+						for (const FString& File : ArchiveFiles)
+						{
+							FString FullPath = FPaths::Combine(SessionDir, File);
+							FString Label = File;
+							Label.RemoveFromStart(TEXT("session_"));
+							Label.RemoveFromEnd(TEXT(".json"));
+							// "2026-03-29T14-05" → "2026-03-29  14:05"
+							Label.ReplaceInline(TEXT("T"), TEXT("  "));
+							Label.ReplaceInline(TEXT("-"), TEXT(":"), ESearchCase::CaseSensitive);
+							// Restore date dashes (first 10 chars are date)
+							if (Label.Len() >= 10)
+							{
+								Label[4] = TEXT('-');
+								Label[7] = TEXT('-');
+							}
+
+							List->AddSlot()
+							[
+								SNew(SButton)
+								.Text(FText::FromString(Label))
+								.TextStyle(FAppStyle::Get(), "SmallText")
+								.OnClicked_Lambda([this, FullPath]()
+								{
+									OnRestoreArchive.ExecuteIfBound(FullPath);
+									return FReply::Handled();
+								})
+							];
+						}
+						return SNew(SBox).MaxDesiredHeight(220.0f) [ List ];
+					})
+					.ToolTipText(LOCTEXT("ArchivesTip", "Pick and restore a specific archived session"))
 				]
 			]
 
@@ -266,74 +337,90 @@ void SClaudeToolbar::Construct(const FArguments& InArgs)
 					.ToolTipText(LOCTEXT("CompactTip", "Summarize conversation to free up context window"))
 				]
 
-				// Role toggle buttons — click to activate sticky mode, click again to return to Worker
+				// Role toggle buttons — lit green when active, click again to return to Worker
 				+ SHorizontalBox::Slot()
 				.AutoWidth()
 				.VAlign(VAlign_Center)
 				.Padding(4.0f, 0.0f, 0.0f, 0.0f)
 				[
-					SNew(SCheckBox)
-					.Style(FAppStyle::Get(), "ToggleButtonCheckbox")
-					.IsChecked_Lambda([this]() { return ActiveSendRole.Get() == EModelRole::Critic ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
-					.OnCheckStateChanged_Lambda([this](ECheckBoxState NewState)
+					SNew(SButton)
+					.Text(LOCTEXT("AskCritic", "Critic"))
+					.OnClicked_Lambda([this]()
 					{
-						OnSendRoleChanged.ExecuteIfBound(NewState == ECheckBoxState::Checked ? EModelRole::Critic : EModelRole::Worker);
+						EModelRole NewRole = (ActiveSendRole.Get() == EModelRole::Critic) ? EModelRole::Worker : EModelRole::Critic;
+						OnSendRoleChanged.ExecuteIfBound(NewRole);
+						return FReply::Handled();
+					})
+					.ButtonColorAndOpacity_Lambda([this]()
+					{
+						return ActiveSendRole.Get() == EModelRole::Critic
+							? FLinearColor(0.1f, 0.55f, 0.2f)
+							: FLinearColor(0.15f, 0.15f, 0.17f);
 					})
 					.ToolTipText(LOCTEXT("CriticTip", "Toggle Critic mode — stays active for all sends until toggled off"))
-					[
-						SNew(STextBlock).Text(LOCTEXT("AskCritic", "Critic"))
-					]
 				]
 				+ SHorizontalBox::Slot()
 				.AutoWidth()
 				.VAlign(VAlign_Center)
 				.Padding(2.0f, 0.0f, 0.0f, 0.0f)
 				[
-					SNew(SCheckBox)
-					.Style(FAppStyle::Get(), "ToggleButtonCheckbox")
-					.IsChecked_Lambda([this]() { return ActiveSendRole.Get() == EModelRole::Architect ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
-					.OnCheckStateChanged_Lambda([this](ECheckBoxState NewState)
+					SNew(SButton)
+					.Text(LOCTEXT("AskArchitect", "Architect"))
+					.OnClicked_Lambda([this]()
 					{
-						OnSendRoleChanged.ExecuteIfBound(NewState == ECheckBoxState::Checked ? EModelRole::Architect : EModelRole::Worker);
+						EModelRole NewRole = (ActiveSendRole.Get() == EModelRole::Architect) ? EModelRole::Worker : EModelRole::Architect;
+						OnSendRoleChanged.ExecuteIfBound(NewRole);
+						return FReply::Handled();
+					})
+					.ButtonColorAndOpacity_Lambda([this]()
+					{
+						return ActiveSendRole.Get() == EModelRole::Architect
+							? FLinearColor(0.1f, 0.55f, 0.2f)
+							: FLinearColor(0.15f, 0.15f, 0.17f);
 					})
 					.ToolTipText(LOCTEXT("ArchitectTip", "Toggle Architect mode — stays active for all sends until toggled off"))
-					[
-						SNew(STextBlock).Text(LOCTEXT("AskArchitect", "Architect"))
-					]
 				]
 				+ SHorizontalBox::Slot()
 				.AutoWidth()
 				.VAlign(VAlign_Center)
 				.Padding(2.0f, 0.0f, 0.0f, 0.0f)
 				[
-					SNew(SCheckBox)
-					.Style(FAppStyle::Get(), "ToggleButtonCheckbox")
-					.IsChecked_Lambda([this]() { return ActiveSendRole.Get() == EModelRole::Escalation ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
-					.OnCheckStateChanged_Lambda([this](ECheckBoxState NewState)
+					SNew(SButton)
+					.Text(LOCTEXT("Escalate", "Escalate"))
+					.OnClicked_Lambda([this]()
 					{
-						OnSendRoleChanged.ExecuteIfBound(NewState == ECheckBoxState::Checked ? EModelRole::Escalation : EModelRole::Worker);
+						EModelRole NewRole = (ActiveSendRole.Get() == EModelRole::Escalation) ? EModelRole::Worker : EModelRole::Escalation;
+						OnSendRoleChanged.ExecuteIfBound(NewRole);
+						return FReply::Handled();
+					})
+					.ButtonColorAndOpacity_Lambda([this]()
+					{
+						return ActiveSendRole.Get() == EModelRole::Escalation
+							? FLinearColor(0.1f, 0.55f, 0.2f)
+							: FLinearColor(0.15f, 0.15f, 0.17f);
 					})
 					.ToolTipText(LOCTEXT("EscalateTip", "Toggle Escalation mode — uses a stronger model for all sends until toggled off"))
-					[
-						SNew(STextBlock).Text(LOCTEXT("Escalate", "Escalate"))
-					]
 				]
 				+ SHorizontalBox::Slot()
 				.AutoWidth()
 				.VAlign(VAlign_Center)
 				.Padding(2.0f, 0.0f, 0.0f, 0.0f)
 				[
-					SNew(SCheckBox)
-					.Style(FAppStyle::Get(), "ToggleButtonCheckbox")
-					.IsChecked_Lambda([this]() { return ActiveSendRole.Get() == EModelRole::DocsAgent ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
-					.OnCheckStateChanged_Lambda([this](ECheckBoxState NewState)
+					SNew(SButton)
+					.Text(LOCTEXT("WriteDocs", "Docs"))
+					.OnClicked_Lambda([this]()
 					{
-						OnSendRoleChanged.ExecuteIfBound(NewState == ECheckBoxState::Checked ? EModelRole::DocsAgent : EModelRole::Worker);
+						EModelRole NewRole = (ActiveSendRole.Get() == EModelRole::DocsAgent) ? EModelRole::Worker : EModelRole::DocsAgent;
+						OnSendRoleChanged.ExecuteIfBound(NewRole);
+						return FReply::Handled();
+					})
+					.ButtonColorAndOpacity_Lambda([this]()
+					{
+						return ActiveSendRole.Get() == EModelRole::DocsAgent
+							? FLinearColor(0.1f, 0.55f, 0.2f)
+							: FLinearColor(0.15f, 0.15f, 0.17f);
 					})
 					.ToolTipText(LOCTEXT("DocsTip", "Toggle DocsAgent mode — routes all sends to DocsAgent until toggled off"))
-					[
-						SNew(STextBlock).Text(LOCTEXT("WriteDocs", "Docs"))
-					]
 				]
 
 				+ SHorizontalBox::Slot()

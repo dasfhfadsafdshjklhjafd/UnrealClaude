@@ -366,6 +366,24 @@ FString FClaudeCodeSubsystem::GetSessionFilePath() const
 	return FString();
 }
 
+bool FClaudeCodeSubsystem::LoadSessionFromFile(const FString& FilePath)
+{
+	if (SessionManager.IsValid())
+	{
+		return SessionManager->LoadSessionFromFile(FilePath);
+	}
+	return false;
+}
+
+FString FClaudeCodeSubsystem::GetSessionDir() const
+{
+	if (SessionManager.IsValid())
+	{
+		return SessionManager->GetSessionDir();
+	}
+	return FString();
+}
+
 FString FClaudeCodeSubsystem::BuildPromptWithHistory(const FString& NewPrompt) const
 {
 	if (!SessionManager.IsValid())

@@ -187,6 +187,24 @@ void SClaudeEditorWidget::Construct(const FArguments& InArgs)
 	// Initialize active model from Worker role assignment
 	SyncModelFromWorkerRole();
 
+	// Archive previous session on startup so it's preserved before any new messages overwrite it
+	{
+		FString SessionPath = FClaudeCodeSubsystem::Get().GetSessionFilePath();
+		if (!SessionPath.IsEmpty() && FPaths::FileExists(SessionPath))
+		{
+			FDateTime Now = FDateTime::UtcNow();
+			FString Timestamp = FString::Printf(TEXT("%04d-%02d-%02dT%02d-%02d"),
+				Now.GetYear(), Now.GetMonth(), Now.GetDay(), Now.GetHour(), Now.GetMinute());
+			FString ArchivePath = FPaths::Combine(FPaths::GetPath(SessionPath),
+				FString::Printf(TEXT("session_%s.json"), *Timestamp));
+			// Only archive if an archive for this timestamp doesn't already exist
+			if (!FPaths::FileExists(ArchivePath))
+			{
+				IFileManager::Get().Copy(*ArchivePath, *SessionPath);
+			}
+		}
+	}
+
 	// Check Claude availability on startup
 	if (!IsClaudeAvailable())
 	{

@@ -41,6 +41,10 @@ struct UNREALCLAUDE_API FClaudePromptOptions
 	/** Model override for CLI path (set by SendPromptViaBackend when routing role requests) */
 	FString ModelOverride;
 
+	/** Original user message to store in session history (if empty, the actual prompt is stored).
+	 *  Set when sending an augmented prompt (role prefix + user message) so history stays clean. */
+	FString HistoryPrompt;
+
 	/** Default constructor with sensible defaults */
 	FClaudePromptOptions() = default;
 

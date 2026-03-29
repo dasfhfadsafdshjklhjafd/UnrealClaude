@@ -627,6 +627,9 @@ void SClaudeEditorWidget::SendMessage()
 		// Prepend role prompt to user's message
 		FString AugmentedPrompt = RolePrompt.IsEmpty() ? Prompt : (RolePrompt + Prompt);
 
+		// Store only the original user message in history, not the role-augmented prompt
+		Options.HistoryPrompt = Prompt;
+
 		// Temporarily switch to the role's backend
 		FLLMRoleManager& RoleMgr = FClaudeCodeSubsystem::Get().GetRoleManager();
 		FModelRoleAssignment RoleAssignment = RoleMgr.GetAssignment(SelectedSendRole);

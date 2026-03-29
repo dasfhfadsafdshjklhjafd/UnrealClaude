@@ -114,12 +114,14 @@ void FClaudeCodeSubsystem::SendPrompt(
 	Config.OnStreamEvent = Options.OnStreamEvent;
 
 	// Wrap completion to store history and save session
+	// Use HistoryPrompt if set (clean user message without role prefix), else fall back to Prompt
+	FString HistoryKey = Options.HistoryPrompt.IsEmpty() ? Prompt : Options.HistoryPrompt;
 	FOnClaudeResponse WrappedComplete;
-	WrappedComplete.BindLambda([this, Prompt, OnComplete](const FString& Response, bool bSuccess)
+	WrappedComplete.BindLambda([this, HistoryKey, OnComplete](const FString& Response, bool bSuccess)
 	{
 		if (bSuccess && SessionManager.IsValid())
 		{
-			SessionManager->AddExchange(Prompt, Response);
+			SessionManager->AddExchange(HistoryKey, Response);
 			SessionManager->SaveSession();
 		}
 		OnComplete.ExecuteIfBound(Response, bSuccess);
@@ -615,13 +617,15 @@ void FClaudeCodeSubsystem::SendPromptViaBackend(
 	}
 
 	// Submit turn (ModelId already resolved above, before the CLI early-return)
+	// Use HistoryPrompt if set (clean user message without role prefix), else fall back to Prompt
+	FString HistoryKey = Options.HistoryPrompt.IsEmpty() ? Prompt : Options.HistoryPrompt;
 	FOnLLMTurnComplete WrappedComplete;
-	WrappedComplete.BindLambda([this, Prompt, OnComplete, Role, ModelId](const FLLMTurnResult& Result)
+	WrappedComplete.BindLambda([this, HistoryKey, OnComplete, Role, ModelId](const FLLMTurnResult& Result)
 	{
 		// Record in session history
 		if (Result.bSuccess && SessionManager.IsValid())
 		{
-			SessionManager->AddExchange(Prompt, Result.ResponseText);
+			SessionManager->AddExchange(HistoryKey, Result.ResponseText);
 			SessionManager->SaveSession();
 		}
 
